@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pandas
+numpy
+scikit-learn
+prophet
+python-dotenv
+httpx
+pydantic
+soroban-sdk
