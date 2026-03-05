@@ -1,5 +1,9 @@
 # X-Aegis Backend & AI 🤖⚙️
 
+<p align="center">
+  <img src="logo.jpeg" alt="X-Aegis Logo" width="200" />
+</p>
+
 ```text
 ╔════════════════════════════════════════════════════════════════════╗
 ║                                                                    ║
