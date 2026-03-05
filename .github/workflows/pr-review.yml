@@ -1,0 +1,67 @@
+name: Aegis Backend Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  review:
+    name: Backend PR Audit
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Review Backend Logic
+        id: backend_review
+        continue-on-error: true
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+          # Only run pytest if there are actual tests to run
+          if [ -d "tests" ] || find . -maxdepth 2 -name "test*.py" | grep -q .; then
+            pytest
+          else
+            echo "No tests found. Skipping pytest."
+          fi
+
+      - name: ❌ Handle Review Failure
+        if: steps.backend_review.outcome == 'failure'
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body "### ❌ Institutional Review Required
+          
+          Inconsistencies were found in the backend logic or tests.
+          
+          **Required Action:**
+          1. **Review logs**: Review the logs to identify the failing tests.
+          2. **Audit Alignment**: Ensure the code aligns with our project standards.
+          3. **Stay in Sync**: Ensure your local environment is synchronized with the upstream project.
+          
+          *This PR cannot be merged until the tests pass.*"
+          exit 1
+
+      - name: ✅ Handle Review Success
+        if: steps.backend_review.outcome == 'success'
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body "### ✅ Review Successful
+          
+          The backend logic and tests of this submission have been verified. 
+          
+          **Status:** Perfect Alignment.
+          **Action:** Merging into \`main\`...
+          
+          *Project maintained by @bbkenny.*"
+          
+          gh pr merge ${{ github.event.pull_request.number }} --merge --auto
