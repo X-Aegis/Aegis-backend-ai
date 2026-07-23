@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: Backend Test & Build
+    name: Lint, Test & Build Backend
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -23,7 +23,12 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install -r requirements.txt
-          pip install pytest
+          pip install pytest ruff
+
+      - name: Lint with Ruff
+        continue-on-error: true
+        run: |
+          ruff check .
 
       - name: Run Tests
         id: backend_test
