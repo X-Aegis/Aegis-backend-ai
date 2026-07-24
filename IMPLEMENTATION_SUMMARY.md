@@ -68,7 +68,7 @@ All linting errors from Ruff have been resolved:
 All exceptions now catch specific types:
 - `httpx.RequestError, httpx.HTTPStatusError`
 - `KeyError, ValueError, TypeError`
-- `RuntimeError, OSError, EnvironmentError`
+- `RuntimeError, OSError`
 
 ## How to Run
 

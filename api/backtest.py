@@ -1,7 +1,6 @@
 import os
 import sys
 from datetime import date, datetime
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field

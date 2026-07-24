@@ -198,7 +198,7 @@ def _sign_with_env_key(payload_bytes: bytes) -> str:
     NOT suitable for production.
     """
     if not ADMIN_SECRET_KEY:
-        raise EnvironmentError(
+        raise OSError(
             "ADMIN_SECRET_KEY is not set. Configure a signing backend "
             "(SIGNER_BACKEND=kms or vault) for production use."
         )
@@ -240,7 +240,7 @@ def submit_to_soroban(transaction: dict, signature: str) -> dict:
     Returns the RPC response body.
     """
     if not SOROBAN_RPC_URL:
-        raise EnvironmentError("SOROBAN_RPC_URL is not configured.")
+        raise OSError("SOROBAN_RPC_URL is not configured.")
 
     rpc_payload = {
         "jsonrpc": "2.0",
@@ -326,7 +326,7 @@ def run_rebalance_cycle(current_allocation: str) -> str:
             )
             current_allocation = target_allocation
 
-        except (httpx.RequestError, httpx.HTTPStatusError, RuntimeError, OSError, EnvironmentError) as exc:
+        except (httpx.RequestError, httpx.HTTPStatusError, RuntimeError, OSError) as exc:
             error_message = str(exc)
             status = "failed"
             log.error("Rebalance failed: %s", exc)
