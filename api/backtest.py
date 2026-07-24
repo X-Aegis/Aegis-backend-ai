@@ -23,6 +23,7 @@ class BacktestRequest(BaseModel):
     threshold: float = Field(80.0, ge=0, le=100, description="Volatility score above which the strategy shifts to stable")
     initial_capital: float = Field(10000.0, gt=0)
     stable_apy: float = Field(0.0, ge=0, le=100, description="Annualized yield earned while allocated to stable")
+    model_type: str = Field("realized", description="Model type used: 'realized', 'lstm', or 'gru'")
 
 
 class BacktestMetrics(BaseModel):
@@ -72,6 +73,7 @@ def create_backtest(request: BacktestRequest):
             threshold=request.threshold,
             initial_capital=request.initial_capital,
             stable_apy=request.stable_apy,
+            model_type=request.model_type,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -81,6 +83,7 @@ def create_backtest(request: BacktestRequest):
         "threshold": request.threshold,
         "initial_capital": request.initial_capital,
         "stable_apy": request.stable_apy,
+        "model_type": request.model_type,
     }
 
     record = save_backtest_result(

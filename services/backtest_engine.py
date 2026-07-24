@@ -33,6 +33,35 @@ def compute_volatility_scores(df, window):
     return df
 
 
+def compute_predictive_volatility_scores(df, window, model_type):
+    """
+    Computes volatility scores using a trained LSTM or GRU model.
+    """
+    from services.volatility_model import VolatilityModelWrapper
+    df = df.copy()
+    rates = df["rate"].tolist()
+    
+    wrapper = VolatilityModelWrapper(model_type=model_type, seq_len=window)
+    # Train the model on the full historical rates series
+    wrapper.fit(rates, epochs=30, target_window=window)
+    
+    scores = []
+    for i in range(len(df)):
+        if i < window:
+            scores.append(np.nan)
+        else:
+            # Predict using rates up to index i
+            rates_slice = rates[:i+1]
+            score = wrapper.predict(rates_slice)
+            scores.append(score)
+            
+    df["volatility_score"] = scores
+    df["return"] = df["rate"].pct_change()
+    df["rolling_std"] = df["return"].rolling(window=window, min_periods=window).std()
+    
+    return df
+
+
 def _max_drawdown_pct(values):
     values = np.asarray(values, dtype=float)
     running_max = np.maximum.accumulate(values)
@@ -92,7 +121,7 @@ def _simulate(df, threshold, initial_capital, stable_apy, strategy_enabled):
     }
 
 
-def run_backtest(rate_rows, volatility_window, threshold, initial_capital, stable_apy):
+def run_backtest(rate_rows, volatility_window, threshold, initial_capital, stable_apy, model_type="realized"):
     """
     rate_rows: [(timestamp, rate), ...] for a single pair, any order.
 
@@ -100,6 +129,10 @@ def run_backtest(rate_rows, volatility_window, threshold, initial_capital, stabl
     'baseline_metrics' and 'comparison'. Raises ValueError for insufficient or
     invalid data.
     """
+    model_type_lower = model_type.lower() if isinstance(model_type, str) else "realized"
+    if model_type_lower not in ["realized", "lstm", "gru"]:
+        raise ValueError(f"Invalid model_type: '{model_type}'. Must be 'realized', 'lstm', or 'gru'.")
+
     df = pd.DataFrame(rate_rows, columns=["timestamp", "rate"])
     df["rate"] = df["rate"].astype(float)
     df = df.sort_values("timestamp").reset_index(drop=True)
@@ -114,7 +147,10 @@ def run_backtest(rate_rows, volatility_window, threshold, initial_capital, stabl
     if (df["rate"] <= 0).any():
         raise ValueError("Non-positive rate encountered in fx_rates series; cannot backtest.")
 
-    scored = compute_volatility_scores(df, volatility_window)
+    if model_type_lower == "realized":
+        scored = compute_volatility_scores(df, volatility_window)
+    else:
+        scored = compute_predictive_volatility_scores(df, volatility_window, model_type_lower)
 
     strategy_metrics = _simulate(scored, threshold, initial_capital, stable_apy, strategy_enabled=True)
     baseline_metrics = _simulate(scored, threshold, initial_capital, stable_apy, strategy_enabled=False)
