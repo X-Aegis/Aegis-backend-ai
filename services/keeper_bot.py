@@ -164,7 +164,7 @@ def _sign_with_aws_kms(payload_bytes: bytes) -> str:
         signature = base64.b64encode(response["Signature"]).decode()
         log.info("Transaction signed via AWS KMS (key_id=%s)", AWS_KMS_KEY_ID)
         return signature
-    except Exception as exc:
+    except (KeyError, RuntimeError, OSError) as exc:
         log.error("AWS KMS signing failed: %s", exc)
         raise
 
@@ -187,7 +187,7 @@ def _sign_with_vault(payload_bytes: bytes) -> str:
         signature = sig_raw.split(":")[-1]  # strip vault prefix
         log.info("Transaction signed via HashiCorp Vault (%s)", VAULT_KEY_PATH)
         return signature
-    except Exception as exc:
+    except (httpx.RequestError, httpx.HTTPStatusError, KeyError, ValueError) as exc:
         log.error("HashiCorp Vault signing failed: %s", exc)
         raise
 
@@ -288,7 +288,7 @@ def run_rebalance_cycle(current_allocation: str) -> str:
     except httpx.HTTPStatusError as exc:
         log.error("Model API HTTP error %s: %s", exc.response.status_code, exc)
         return current_allocation
-    except Exception as exc:
+    except (httpx.RequestError, ValueError, KeyError) as exc:
         log.error("Failed to fetch risk score: %s", exc)
         return current_allocation
 
@@ -326,7 +326,7 @@ def run_rebalance_cycle(current_allocation: str) -> str:
             )
             current_allocation = target_allocation
 
-        except Exception as exc:
+        except (httpx.RequestError, httpx.HTTPStatusError, RuntimeError, OSError, EnvironmentError) as exc:
             error_message = str(exc)
             status = "failed"
             log.error("Rebalance failed: %s", exc)
@@ -347,7 +347,7 @@ def run_rebalance_cycle(current_allocation: str) -> str:
             tx_hash=tx_hash,
             error_message=error_message,
         )
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         log.warning("Could not persist rebalance event: %s", exc)
 
     log.info("=== Rebalance cycle complete — status=%s ===", status)

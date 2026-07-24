@@ -35,7 +35,7 @@ async def fetch_fixer_rates():
             for symbol, rate in data["rates"].items():
                 rates.append((timestamp, f"{BASE_CURRENCY}/{symbol}", rate, "Fixer.io"))
             return rates
-    except Exception as e:
+    except (httpx.RequestError, httpx.HTTPStatusError, KeyError, ValueError) as e:
         print(f"Error fetching from Fixer.io: {e}")
         return []
 
@@ -56,7 +56,7 @@ async def fetch_open_exchange_rates():
             for symbol, rate in data["rates"].items():
                 rates.append((timestamp, f"{BASE_CURRENCY}/{symbol}", rate, "OpenExchangeRates"))
             return rates
-    except Exception as e:
+    except (httpx.RequestError, httpx.HTTPStatusError, KeyError, ValueError) as e:
         print(f"Error fetching from Open Exchange Rates: {e}")
         return []
 
