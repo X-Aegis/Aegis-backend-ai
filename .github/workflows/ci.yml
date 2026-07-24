@@ -17,7 +17,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
           cache: 'pip'
 
       - name: Install Dependencies
@@ -26,17 +26,13 @@ jobs:
           pip install pytest ruff
 
       - name: Lint with Ruff
-        continue-on-error: true
         run: |
           ruff check .
 
       - name: Run Tests
-        id: backend_test
-        continue-on-error: true
         run: |
-          # Only run pytest if there are actual tests to run
-          if [ -d "tests" ] || find . -maxdepth 2 -name "test*.py" | grep -q .; then
-            pytest
+          if find . -maxdepth 3 -name "test_*.py" -o -name "*_test.py" | grep -q .; then
+            pytest --tb=short
           else
             echo "No tests found. Skipping pytest."
           fi

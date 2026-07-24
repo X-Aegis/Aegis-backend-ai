@@ -15,93 +15,97 @@ jobs:
     name: Institutional PR Audit
     runs-on: ubuntu-latest
     env:
-      # We use MAINTAINER_TOKEN if available, otherwise fallback to GITHUB_TOKEN.
-      # MAINTAINER_TOKEN makes all actions (comments, approvals, merges) appear as bbkenny.
       GITHUB_TOKEN: ${{ secrets.MAINTAINER_TOKEN != '' && secrets.MAINTAINER_TOKEN || secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          # Required for pull_request_target to checkout fork PR code.
-          # Safe because we only read the diff/run tests, not execute arbitrary code.
-          allow-unsafe-pr-checkout: true
 
       - name: 🔍 Check for Issue Link
         run: |
-          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} --json body -q .body)
+          PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body)
           if ! echo "$PR_BODY" | grep -Eiq "(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved) #[0-9]+"; then
             RESPONSES=(
-              "hey @${{ github.event.pull_request.user.login }}! i noticed you didn't link an issue in your PR description. please add \`Closes #ISSUE_NUMBER\` so we can close it when merged!"
-              "Thanks for the PR @${{ github.event.pull_request.user.login }}! Could you please link the issue it resolves using \`Closes #ISSUE_NUMBER\` in the description? It helps us track things better."
-              "Hey @${{ github.event.pull_request.user.login }}, looks like the PR description is missing an issue link. Just drop a \`Closes #123\` in there so we can link them up!"
-              "Awesome start @${{ github.event.pull_request.user.login }}, but could you add a closing keyword like \`Closes #ISSUE\` to the PR body? That way GitHub will close the issue for us."
-              "I'd love to review this @${{ github.event.pull_request.user.login }}, but we need an issue linked first! Please update the description with \`Closes #ISSUE_NUMBER\`."
-              "Hey @${{ github.event.pull_request.user.login }}, before we proceed, please link the related issue in the description (e.g., \`Fixes #41\`). Thanks!"
+              "hey @${PR_AUTHOR}! i noticed you didn't link an issue in your PR description. please add \`Closes #ISSUE_NUMBER\` so we can close it when merged!"
+              "Thanks for the PR @${PR_AUTHOR}! Could you please link the issue it resolves using \`Closes #ISSUE_NUMBER\` in the description? It helps us track things better."
+              "Hey @${PR_AUTHOR}, looks like the PR description is missing an issue link. Just drop a \`Closes #123\` in there so we can link them up!"
+              "Awesome start @${PR_AUTHOR}, but could you add a closing keyword like \`Closes #ISSUE\` to the PR body? That way GitHub will close the issue for us."
+              "I'd love to review this @${PR_AUTHOR}, but we need an issue linked first! Please update the description with \`Closes #ISSUE_NUMBER\`."
+              "Hey @${PR_AUTHOR}, before we proceed, please link the related issue in the description (e.g., \`Fixes #41\`). Thanks!"
             )
-            SELECTED=$(shuf -n1 -e "${RESPONSES[@]}")
-            gh pr comment ${{ github.event.pull_request.number }} --body "$SELECTED"
+            SELECTED=$(printf '%s\n' "${RESPONSES[@]}" | shuf -n1)
+            gh pr comment "$PR_NUMBER" --body "$SELECTED"
             exit 1
           fi
 
       - name: 🚨 Check for Merge Conflicts
         run: |
-          MERGEABLE=$(gh pr view ${{ github.event.pull_request.number }} --json mergeable -q .mergeable)
-          if [ "$MERGEABLE" == "CONFLICTING" ]; then
+          MERGEABLE=$(gh pr view "$PR_NUMBER" --json mergeable -q .mergeable)
+          if [ "$MERGEABLE" = "CONFLICTING" ]; then
             RESPONSES=(
-              "hey @${{ github.event.pull_request.user.login }}, it looks like there are merge conflicts with the \`main\` branch. could you pull the latest changes and resolve them so i can run my tests?"
-              "Hi @${{ github.event.pull_request.user.login }}! This PR currently has merge conflicts with \`main\`. Please rebase or merge the latest changes so we can proceed with the review."
-              "Looks like some conflicts popped up with the base branch @${{ github.event.pull_request.user.login }}! Once you resolve them, the automated checks will kick off again."
-              "Hey @${{ github.event.pull_request.user.login }}, we can't merge this yet because of conflicts with \`main\`. Mind taking a look and fixing them up?"
-              "Merge conflicts detected @${{ github.event.pull_request.user.login }}! Please sync your branch with \`main\` and resolve the conflicts so we can get this reviewed."
-              "HI @${{ github.event.pull_request.user.login }}, looks like someone else merged changes that conflict with yours. Please resolve the conflicts and push an update!"
+              "hey @${PR_AUTHOR}, it looks like there are merge conflicts with the \`main\` branch. could you pull the latest changes and resolve them so i can run my tests?"
+              "Hi @${PR_AUTHOR}! This PR currently has merge conflicts with \`main\`. Please rebase or merge the latest changes so we can proceed with the review."
+              "Looks like some conflicts popped up with the base branch @${PR_AUTHOR}! Once you resolve them, the automated checks will kick off again."
+              "Hey @${PR_AUTHOR}, we can't merge this yet because of conflicts with \`main\`. Mind taking a look and fixing them up?"
+              "Merge conflicts detected @${PR_AUTHOR}! Please sync your branch with \`main\` and resolve the conflicts so we can get this reviewed."
+              "Hi @${PR_AUTHOR}, looks like someone else merged changes that conflict with yours. Please resolve the conflicts and push an update!"
             )
-            SELECTED=$(shuf -n1 -e "${RESPONSES[@]}")
-            gh pr comment ${{ github.event.pull_request.number }} --body "$SELECTED"
+            SELECTED=$(printf '%s\n' "${RESPONSES[@]}" | shuf -n1)
+            gh pr comment "$PR_NUMBER" --body "$SELECTED"
             exit 1
           fi
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
-          components: clippy
+          python-version: '3.11'
+          cache: 'pip'
 
-      - name: Lint with Clippy
+      - name: Install Python Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest ruff
+
+      - name: 🐍 Lint with Ruff
         id: lint_review
         continue-on-error: true
         run: |
-          cd smartcontract
-          cargo clippy --all-targets --all-features -- -D warnings
+          ruff check .
 
-      - name: Review Core Logic
+      - name: 🧪 Run Python Tests
         id: build_review
         continue-on-error: true
         run: |
-          cd smartcontract
-          cargo test --all && cargo build --target wasm32-unknown-unknown --release
+          if find . -maxdepth 3 -name "test_*.py" -o -name "*_test.py" | grep -q .; then
+            pytest --tb=short
+          else
+            echo "No tests found. Skipping pytest."
+          fi
 
       - name: ❌ Handle Lint Failure
         if: steps.lint_review.outcome == 'failure'
         run: |
-          PR_TITLE=$(gh pr view ${{ github.event.pull_request.number }} --json title -q .title)
-          gh pr comment ${{ github.event.pull_request.number }} --body "Hey @${{ github.event.pull_request.user.login }}, the linter (\`cargo clippy\`) flagged some warnings in '$PR_TITLE'. Please run \`cargo clippy --all-targets --all-features -- -D warnings\` locally and fix the issues before pushing again."
+          PR_TITLE=$(gh pr view "$PR_NUMBER" --json title -q .title)
+          gh pr comment "$PR_NUMBER" --body "Hey @${PR_AUTHOR}, the linter (\`ruff\`) flagged some issues in **${PR_TITLE}**. Please run \`ruff check . --fix\` locally, commit the fixes, and push again."
 
       - name: ❌ Handle Review Failure
         if: steps.build_review.outcome == 'failure'
         run: |
-          PR_TITLE=$(gh pr view ${{ github.event.pull_request.number }} --json title -q .title)
+          PR_TITLE=$(gh pr view "$PR_NUMBER" --json title -q .title)
           RESPONSES=(
-            "hey @${{ github.event.pull_request.user.login }}, took a look at the PR for '$PR_TITLE'. actually, it looks like the CI checks (tests/build) are failing right now. mind checking the logs and fixing the errors? once it's passing, just push an update and we can get it merged."
-            "Thanks for submitting '$PR_TITLE' @${{ github.event.pull_request.user.login }}! Unfortunately, the automated checks failed. Please review the Actions logs to see what went wrong and push a fix."
-            "Hey @${{ github.event.pull_request.user.login }}! The build/tests are currently failing for '$PR_TITLE'. Could you take a look at the workflow logs and patch up the errors?"
-            "Looks like there are some failing checks on '$PR_TITLE' @${{ github.event.pull_request.user.login }}. Once you get the tests passing, let us know by pushing the fixes!"
-            "We're almost there with '$PR_TITLE' @${{ github.event.pull_request.user.login }}, but the CI pipeline is red. Check the logs for details and push an update when you have it fixed!"
-            "Hey @${{ github.event.pull_request.user.login }}, the automated tests didn't pass for '$PR_TITLE'. Mind taking a look at the errors and fixing them up?"
+            "hey @${PR_AUTHOR}, took a look at the PR for '${PR_TITLE}'. actually, it looks like the CI checks (tests/build) are failing right now. mind checking the logs and fixing the errors? once it's passing, just push an update and we can get it merged."
+            "Thanks for submitting '${PR_TITLE}' @${PR_AUTHOR}! Unfortunately, the automated checks failed. Please review the Actions logs to see what went wrong and push a fix."
+            "Hey @${PR_AUTHOR}! The build/tests are currently failing for '${PR_TITLE}'. Could you take a look at the workflow logs and patch up the errors?"
+            "Looks like there are some failing checks on '${PR_TITLE}' @${PR_AUTHOR}. Once you get the tests passing, let us know by pushing the fixes!"
+            "We're almost there with '${PR_TITLE}' @${PR_AUTHOR}, but the CI pipeline is red. Check the logs for details and push an update when you have it fixed!"
+            "Hey @${PR_AUTHOR}, the automated tests didn't pass for '${PR_TITLE}'. Mind taking a look at the errors and fixing them up?"
           )
-          SELECTED=$(shuf -n1 -e "${RESPONSES[@]}")
-          gh pr comment ${{ github.event.pull_request.number }} --body "$SELECTED"
+          SELECTED=$(printf '%s\n' "${RESPONSES[@]}" | shuf -n1)
+          gh pr comment "$PR_NUMBER" --body "$SELECTED"
           exit 1
 
       - name: 🤖 AI Code Review (Claude)
@@ -109,7 +113,6 @@ jobs:
         if: steps.build_review.outcome == 'success' && steps.lint_review.outcome == 'success'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           echo "═══════════════════════════════════════════"
@@ -118,45 +121,44 @@ jobs:
 
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "⚠️ No ANTHROPIC_API_KEY found — skipping AI review."
-            echo "   Add ANTHROPIC_API_KEY to org secrets to enable AI reviews."
             exit 0
           fi
           echo "✅ ANTHROPIC_API_KEY is set (length: ${#ANTHROPIC_API_KEY} chars)"
 
-          PR_BODY=$(gh pr view $PR_NUMBER --json body -q .body)
+          PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body)
           ISSUE_NUMBER=$(echo "$PR_BODY" | grep -oEi "(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved) #[0-9]+" | head -n 1 | grep -oE "[0-9]+")
 
           if [ -z "$ISSUE_NUMBER" ]; then
             echo "⚠️ No linked issue found in PR body — skipping AI review."
-            echo "   AI review requires a linked issue (e.g., 'Closes #42') for context."
             exit 0
           fi
 
           echo "📋 Linked Issue: #$ISSUE_NUMBER"
           echo "📎 PR Number: #$PR_NUMBER"
 
-          ISSUE_BODY=$(gh issue view $ISSUE_NUMBER --json body -q .body)
-          PR_DIFF=$(gh pr diff $PR_NUMBER)
-          PR_COMMENTS=$(gh pr view $PR_NUMBER --json comments --jq '[.comments[].body] | join("\n\n---\n\n")')
+          ISSUE_BODY=$(gh issue view "$ISSUE_NUMBER" --json body -q .body)
+          PR_DIFF=$(gh pr diff "$PR_NUMBER")
+          PR_COMMENTS=$(gh pr view "$PR_NUMBER" --json comments --jq '[.comments[].body] | join("\n\n---\n\n")')
 
-          echo "$ISSUE_BODY" > issue.txt
-          echo "$PR_DIFF" > diff.txt
-          echo "$PR_BODY" > pr_body.txt
-          echo "$PR_COMMENTS" > pr_comments.txt
+          echo "$ISSUE_BODY"    > issue.txt
+          echo "$PR_DIFF"      > diff.txt
+          echo "$PR_BODY"      > pr_body.txt
+          echo "$PR_COMMENTS"  > pr_comments.txt
+
           echo "📏 Issue body: $(wc -c < issue.txt) bytes"
-          echo "📏 PR diff: $(wc -c < diff.txt) bytes"
+          echo "📏 PR diff:    $(wc -c < diff.txt) bytes"
 
           cat << 'EOF' > ai_review.js
           const fs = require('fs');
           const { execSync } = require('child_process');
 
-          const issue = fs.readFileSync('issue.txt', 'utf8');
-          const diff = fs.readFileSync('diff.txt', 'utf8');
-          const prBody = fs.existsSync('pr_body.txt') ? fs.readFileSync('pr_body.txt', 'utf8') : '';
+          const issue      = fs.readFileSync('issue.txt',       'utf8');
+          const diff       = fs.readFileSync('diff.txt',        'utf8');
+          const prBody     = fs.existsSync('pr_body.txt')     ? fs.readFileSync('pr_body.txt',     'utf8') : '';
           const prComments = fs.existsSync('pr_comments.txt') ? fs.readFileSync('pr_comments.txt', 'utf8') : '';
-          const prNumber = process.env.PR_NUMBER;
-          const apiKey = process.env.ANTHROPIC_API_KEY;
-          const author = process.env.AUTHOR;
+          const prNumber   = process.env.PR_NUMBER;
+          const apiKey     = process.env.ANTHROPIC_API_KEY;
+          const author     = process.env.AUTHOR;
 
           const prompt = `You are an expert Senior Developer reviewing a Pull Request.
           Your task is to verify if the PR successfully solves the requirements of the linked Issue.
@@ -191,51 +193,45 @@ jobs:
               const res = await fetch('https://api.anthropic.com/v1/messages', {
                 method: 'POST',
                 headers: {
-                  'content-type': 'application/json',
-                  'x-api-key': apiKey,
-                  'anthropic-version': '2023-06-01'
+                  'content-type':        'application/json',
+                  'x-api-key':           apiKey,
+                  'anthropic-version':   '2023-06-01'
                 },
                 body: JSON.stringify({
-                  model: 'claude-sonnet-4-6',
+                  model:      'claude-sonnet-4-6',
                   max_tokens: 1500,
-                  messages: [{role: 'user', content: prompt}]
+                  messages:   [{ role: 'user', content: prompt }]
                 })
               });
 
               if (!res.ok) {
                 const errorBody = await res.text();
-                console.error(`❌ AI API failed with status ${res.status}`);
-                console.error(`   Response: ${errorBody}`);
+                console.error(`❌ AI API failed with status ${res.status}: ${errorBody}`);
                 console.log('⚠️ Falling back to non-AI review flow.');
                 process.exit(0);
               }
 
-              const data = await res.json();
-              console.log(`✅ API responded successfully (usage: ${data.usage?.input_tokens} in / ${data.usage?.output_tokens} out tokens)`);
+              const data         = await res.json();
               const responseText = data.content[0].text.trim();
+              console.log(`✅ API responded (usage: ${data.usage?.input_tokens}in / ${data.usage?.output_tokens}out tokens)`);
 
               if (responseText.startsWith('PASS')) {
-                console.log("🎉 AI Review Result: PASS");
+                console.log('🎉 AI Review Result: PASS');
                 const approvalMsg = responseText.replace(/^PASS\s*/i, '').trim();
                 if (approvalMsg) {
-                    console.log(`   AI comment: "${approvalMsg.substring(0, 100)}..."`);
-                    fs.writeFileSync('ai_approval.txt', approvalMsg);
+                  fs.writeFileSync('ai_approval.txt', approvalMsg);
                 }
                 process.exit(0);
               } else {
-                console.log("🚫 AI Review Result: FAIL");
+                console.log('🚫 AI Review Result: FAIL');
                 const feedback = responseText.replace(/^FAIL\s*/i, '').trim();
-                console.log(`   AI feedback: "${feedback.substring(0, 100)}..."`);
-                const comment = `**Review against issue body failed**\n\nHey @${author}, thanks for the PR! I just reviewed your code against the linked issue, and it looks like it needs some adjustments before we can merge it:\n\n> ${feedback.split('\n').join('\n> ')}`;
-
+                const comment  = `**Review against issue body failed**\n\nHey @${author}, thanks for the PR! I just reviewed your code against the linked issue, and it looks like it needs some adjustments before we can merge it:\n\n> ${feedback.split('\n').join('\n> ')}`;
                 fs.writeFileSync('feedback.txt', comment);
                 execSync(`gh pr comment ${prNumber} --body-file feedback.txt`);
                 process.exit(1);
               }
             } catch (err) {
-              console.error("❌ AI Review encountered an unexpected error:");
-              console.error(`   Error: ${err.message}`);
-              console.error(`   Stack: ${err.stack}`);
+              console.error(`❌ AI Review error: ${err.message}`);
               console.log('⚠️ Falling back to non-AI review flow.');
               process.exit(0);
             }
@@ -249,49 +245,41 @@ jobs:
       - name: ✅ Handle Review Success
         if: steps.build_review.outcome == 'success' && steps.lint_review.outcome == 'success'
         run: |
-          PR_TITLE=$(gh pr view ${{ github.event.pull_request.number }} --json title -q .title)
-          PR_NUMBER=${{ github.event.pull_request.number }}
+          PR_TITLE=$(gh pr view "$PR_NUMBER" --json title -q .title)
           OWNER="${{ github.repository_owner }}"
           REPO="${{ github.event.repository.name }}"
 
-          # Create an array of dynamic responses
           RESPONSES=(
-            "hey @${{ github.event.pull_request.user.login }}, just went through the changes for '$PR_TITLE'. logic looks really solid and the tests passed perfectly. going ahead and approving + merging this into main now, thanks for the contribution!"
-            "Awesome work on '$PR_TITLE' @${{ github.event.pull_request.user.login }}. Tests are completely green, so I'm approving this!"
-            "Everything looks perfect for '$PR_TITLE' @${{ github.event.pull_request.user.login }}. Thanks for the contribution, approved and merging!"
-            "Solid implementation on '$PR_TITLE' @${{ github.event.pull_request.user.login }}. Tests passed, approving and merging now."
-            "Great job here on '$PR_TITLE' @${{ github.event.pull_request.user.login }}. Logic is sound and tests are passing. Approved!"
-            "Looks good to me @${{ github.event.pull_request.user.login }}! '$PR_TITLE' passed all checks. Merging this in, thanks!"
-            "Love the changes in '$PR_TITLE' @${{ github.event.pull_request.user.login }}. Spot on! Approved and merging."
+            "hey @${PR_AUTHOR}, just went through the changes for '${PR_TITLE}'. logic looks really solid and the tests passed perfectly. going ahead and approving + merging this into main now, thanks for the contribution!"
+            "Awesome work on '${PR_TITLE}' @${PR_AUTHOR}. Tests are completely green, so I'm approving this!"
+            "Everything looks perfect for '${PR_TITLE}' @${PR_AUTHOR}. Thanks for the contribution, approved and merging!"
+            "Solid implementation on '${PR_TITLE}' @${PR_AUTHOR}. Tests passed, approving and merging now."
+            "Great job here on '${PR_TITLE}' @${PR_AUTHOR}. Logic is sound and tests are passing. Approved!"
+            "Looks good to me @${PR_AUTHOR}! '${PR_TITLE}' passed all checks. Merging this in, thanks!"
+            "Love the changes in '${PR_TITLE}' @${PR_AUTHOR}. Spot on! Approved and merging."
           )
 
           if [ -f ai_approval.txt ]; then
             SELECTED_RESPONSE=$(cat ai_approval.txt)
             echo "🤖 Using AI-generated approval comment."
           else
-            SELECTED_RESPONSE=$(shuf -n1 -e "${RESPONSES[@]}")
-            echo "📝 Using random pre-written approval comment (AI review was skipped or unavailable)."
+            SELECTED_RESPONSE=$(printf '%s\n' "${RESPONSES[@]}" | shuf -n1)
+            echo "📝 Using random pre-written approval comment."
           fi
 
-          # 1. Approve the PR with the dynamic comment (This looks like it came from bbkenny!)
           gh pr review "$PR_NUMBER" --approve -b "$SELECTED_RESPONSE"
 
-          # 2. Merge the PR when allowed; fall back gracefully when auto-merge is disabled
-          allowed=$(gh api repos/"$OWNER"/"$REPO" -q '.allow_auto_merge' 2>/dev/null || echo "false")
+          allowed=$(gh api "repos/${OWNER}/${REPO}" -q '.allow_auto_merge' 2>/dev/null || echo "false")
           if [ "$allowed" = "true" ]; then
-            echo "Auto-merge is allowed; attempting auto-merge for PR #${PR_NUMBER}..."
-            if gh pr merge "$PR_NUMBER" --auto --merge; then
-              echo "Auto-merge enabled for PR #${PR_NUMBER}."
-            else
-              echo "Auto-merge request failed; attempting direct merge..."
+            echo "Auto-merge allowed; attempting auto-merge for PR #${PR_NUMBER}..."
+            if ! gh pr merge "$PR_NUMBER" --auto --merge; then
+              echo "Auto-merge failed; attempting direct merge..."
               gh pr merge "$PR_NUMBER" --merge || \
-                gh pr comment "$PR_NUMBER" --body "Review passed and PR approved. Auto-merge could not be enabled automatically — please merge manually when ready."
+                gh pr comment "$PR_NUMBER" --body "Review passed and PR approved. Auto-merge could not be enabled — please merge manually when ready."
             fi
           else
-            echo "Auto-merge disabled for $OWNER/$REPO; attempting direct merge..."
-            if gh pr merge "$PR_NUMBER" --merge; then
-              echo "PR #${PR_NUMBER} merged directly."
-            else
+            echo "Auto-merge disabled; attempting direct merge for PR #${PR_NUMBER}..."
+            if ! gh pr merge "$PR_NUMBER" --merge; then
               gh pr comment "$PR_NUMBER" --body "Review passed and PR approved. Auto-merge is disabled for this repository — please merge manually when ready."
             fi
           fi
