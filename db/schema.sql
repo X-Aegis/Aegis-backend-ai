@@ -73,3 +73,20 @@ CREATE TABLE IF NOT EXISTS backtest_results (
 -- Indexes to support "past reports" lookups by variant
 CREATE INDEX IF NOT EXISTS idx_backtest_results_pair_created ON backtest_results (pair, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_backtest_results_strategy_created ON backtest_results (strategy_name, created_at DESC);
+
+-- Table to store Keeper Bot rebalance events
+-- Records every poll cycle where a rebalance was submitted, skipped, or failed.
+CREATE TABLE IF NOT EXISTS rebalance_events (
+    id BIGSERIAL PRIMARY KEY,
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    volatility_score NUMERIC NOT NULL,          -- score observed at the time of the cycle
+    threshold NUMERIC NOT NULL,                 -- configured threshold used for the decision
+    previous_allocation VARCHAR(10) NOT NULL,   -- allocation before this cycle: "risky" | "stable"
+    target_allocation VARCHAR(10) NOT NULL,     -- desired allocation after this cycle
+    status VARCHAR(20) NOT NULL,                -- "submitted" | "skipped" | "failed"
+    tx_hash TEXT,                               -- Soroban transaction hash (NULL if not submitted)
+    error_message TEXT                          -- error detail when status = "failed"
+);
+
+-- Index for querying rebalance history chronologically
+CREATE INDEX IF NOT EXISTS idx_rebalance_events_timestamp ON rebalance_events ("timestamp" DESC);

@@ -11,3 +11,4 @@ pydantic
 soroban-sdk
 feedparser
 vaderSentiment
+boto3==1.34.0
