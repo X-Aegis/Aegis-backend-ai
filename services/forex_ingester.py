@@ -1,8 +1,9 @@
-import os
-import httpx
 import asyncio
-from datetime import datetime, timezone
+import os
 import sys
+from datetime import datetime, timezone
+
+import httpx
 
 # Add project root to sys.path for local imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,7 +36,7 @@ async def fetch_fixer_rates():
             for symbol, rate in data["rates"].items():
                 rates.append((timestamp, f"{BASE_CURRENCY}/{symbol}", rate, "Fixer.io"))
             return rates
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Error fetching from Fixer.io: {e}")
         return []
 
@@ -56,7 +57,7 @@ async def fetch_open_exchange_rates():
             for symbol, rate in data["rates"].items():
                 rates.append((timestamp, f"{BASE_CURRENCY}/{symbol}", rate, "OpenExchangeRates"))
             return rates
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Error fetching from Open Exchange Rates: {e}")
         return []
 

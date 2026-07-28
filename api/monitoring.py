@@ -23,7 +23,6 @@ from __future__ import annotations
 import os
 import sys
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -31,11 +30,11 @@ from pydantic import BaseModel, Field
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.database import (
-    save_prediction,
-    record_actual_outcome,
-    get_predictions_with_actuals,
-    save_drift_event,
     get_drift_summary,
+    get_predictions_with_actuals,
+    record_actual_outcome,
+    save_drift_event,
+    save_prediction,
 )
 from services.drift_detection import DriftMonitor
 
@@ -90,8 +89,8 @@ class DriftReportResponse(BaseModel):
     predicted: float
     actual: float
     abs_error: float
-    rolling_mae: Optional[float]
-    rolling_rmse: Optional[float]
+    rolling_mae: float | None
+    rolling_rmse: float | None
     adwin_drift_detected: bool
     ph_drift_detected: bool
     drift_detected: bool
@@ -106,8 +105,8 @@ class DriftEventRow(BaseModel):
     predicted: float
     actual: float
     abs_error: float
-    rolling_mae: Optional[float]
-    rolling_rmse: Optional[float]
+    rolling_mae: float | None
+    rolling_rmse: float | None
     adwin_drift_detected: bool
     ph_drift_detected: bool
     ph_statistic: float
@@ -160,11 +159,7 @@ def record_outcome(body: OutcomeIn):
     The ``rolling_window``, ``adwin_delta``, and ``ph_lambda`` parameters
     allow per-call tuning without changing global state.
     """
-    # 1. Locate the original prediction to determine the pair.
-    rows = get_predictions_with_actuals(pair="USD/NGN", horizon=body.horizon, limit=1)
-    # We need the pair — derive it by peeking at the most recent row for this
-    # horizon; fall back to a broad query if necessary.
-    # (We will update the actual first, then re-query.)
+    # 1. Update the actual outcome first.
     updated = record_actual_outcome(
         timestamp=body.timestamp,
         horizon=body.horizon,

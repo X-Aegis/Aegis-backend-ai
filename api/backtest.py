@@ -1,14 +1,13 @@
 import os
 import sys
 from datetime import date, datetime
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 # Add project root to sys.path for local imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from lib.database import get_fx_rate_series, save_backtest_result, list_backtest_results
+from lib.database import get_fx_rate_series, list_backtest_results, save_backtest_result
 from services.backtest_engine import run_backtest
 
 router = APIRouter(prefix="/backtest", tags=["backtest"])
@@ -30,6 +29,8 @@ class BacktestMetrics(BaseModel):
     final_value: float
     total_return_pct: float
     max_drawdown_pct: float
+    sharpe_ratio: float
+    win_rate_pct: float
     num_regime_switches: int
     time_in_stable_pct: float
 
@@ -37,6 +38,7 @@ class BacktestMetrics(BaseModel):
 class BacktestComparison(BaseModel):
     return_improvement_pct: float
     drawdown_reduction_pct: float
+    sharpe_improvement: float
 
 
 class BacktestResult(BaseModel):
@@ -115,8 +117,8 @@ def create_backtest(request: BacktestRequest):
 
 @router.get("/results", response_model=list[BacktestResult])
 def get_backtest_results(
-    pair: Optional[str] = None,
-    strategy_name: Optional[str] = None,
+    pair: str | None = None,
+    strategy_name: str | None = None,
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):

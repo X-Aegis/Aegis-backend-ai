@@ -1,6 +1,6 @@
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -9,7 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services.backtest_engine import run_backtest
 
 
-def _series(rates, start=datetime(2026, 1, 1), step=timedelta(hours=1)):
+def _series(rates, start=datetime(2026, 1, 1, tzinfo=timezone.utc), step=timedelta(hours=1)):
     return [(start + i * step, rate) for i, rate in enumerate(rates)]
 
 

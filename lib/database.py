@@ -1,8 +1,9 @@
 import os
 from datetime import timedelta
+
 import psycopg2
-from psycopg2.extras import execute_values, Json, RealDictCursor
 from dotenv import load_dotenv
+from psycopg2.extras import Json, RealDictCursor, execute_values
 
 load_dotenv()
 

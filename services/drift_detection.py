@@ -27,15 +27,14 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence
-
 
 # ---------------------------------------------------------------------------
 # Rolling accuracy metrics
 # ---------------------------------------------------------------------------
 
-def compute_rolling_mae(errors: Sequence[float], window: int) -> Optional[float]:
+def compute_rolling_mae(errors: Sequence[float], window: int) -> float | None:
     """Return MAE over the most recent *window* absolute errors, or None if
     fewer than *window* observations are available."""
     if len(errors) < window:
@@ -44,7 +43,7 @@ def compute_rolling_mae(errors: Sequence[float], window: int) -> Optional[float]
     return sum(recent) / len(recent)
 
 
-def compute_rolling_rmse(errors: Sequence[float], window: int) -> Optional[float]:
+def compute_rolling_rmse(errors: Sequence[float], window: int) -> float | None:
     """Return RMSE over the most recent *window* absolute errors, or None if
     fewer than *window* observations are available."""
     if len(errors) < window:
@@ -254,7 +253,7 @@ class DriftMonitor:
     ph_alpha: float = 1.0
     normalize_cap: float = 100.0
 
-    _errors: List[float] = field(default_factory=list, init=False, repr=False)
+    _errors: list[float] = field(default_factory=list, init=False, repr=False)
     _adwin: ADWINDetector = field(init=False, repr=False)
     _ph: PageHinkleyDetector = field(init=False, repr=False)
 
@@ -270,7 +269,7 @@ class DriftMonitor:
     # Public API                                                           #
     # ------------------------------------------------------------------ #
 
-    def update(self, predicted: float, actual: float) -> "DriftReport":
+    def update(self, predicted: float, actual: float) -> DriftReport:
         """Register a new (predicted, actual) pair and return a :class:`DriftReport`."""
         abs_error = abs(predicted - actual)
         self._errors.append(abs_error)
@@ -291,7 +290,7 @@ class DriftMonitor:
             ph_statistic=self._ph.ph_statistic,
         )
 
-    def bulk_update(self, pairs: Sequence[tuple[float, float]]) -> "DriftReport":
+    def bulk_update(self, pairs: Sequence[tuple[float, float]]) -> DriftReport:
         """Process a sequence of ``(predicted, actual)`` pairs in order and
         return the report for the final observation."""
         report = None
@@ -307,7 +306,7 @@ class DriftMonitor:
         return len(self._errors)
 
     @property
-    def errors(self) -> List[float]:
+    def errors(self) -> list[float]:
         """All absolute errors observed so far (immutable snapshot)."""
         return list(self._errors)
 
@@ -353,8 +352,8 @@ class DriftReport:
 
     n_samples: int
     latest_abs_error: float
-    rolling_mae: Optional[float]
-    rolling_rmse: Optional[float]
+    rolling_mae: float | None
+    rolling_rmse: float | None
     adwin_drift_detected: bool
     ph_drift_detected: bool
     adwin_window_size: int
