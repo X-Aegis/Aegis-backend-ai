@@ -1,3 +1,4 @@
+# Aegis Backend AI Dependencies
 psycopg2-binary
 fastapi
 uvicorn[standard]
