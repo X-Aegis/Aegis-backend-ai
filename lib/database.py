@@ -1,8 +1,9 @@
 import os
 from datetime import timedelta
+
 import psycopg2
-from psycopg2.extras import execute_values, Json, RealDictCursor
 from dotenv import load_dotenv
+from psycopg2.extras import Json, RealDictCursor, execute_values
 
 load_dotenv()
 
@@ -194,6 +195,180 @@ def list_backtest_results(pair=None, strategy_name=None, limit=20, offset=0):
                 LIMIT %s OFFSET %s
                 """,
                 values,
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Drift monitoring helpers
+# ---------------------------------------------------------------------------
+
+def save_prediction(timestamp, horizon: int, volatility_score: float, pair: str = "USD/NGN"):
+    """
+    Inserts a live model prediction into the predictions table.
+    actual_outcome is left NULL and can be filled in later via
+    :func:`record_actual_outcome`.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO predictions (timestamp, horizon, volatility_score, pair)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (timestamp, horizon) DO UPDATE
+                    SET volatility_score = EXCLUDED.volatility_score,
+                        pair             = EXCLUDED.pair
+                """,
+                (timestamp, horizon, volatility_score, pair),
+            )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Error saving prediction: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def record_actual_outcome(timestamp, horizon: int, actual_outcome: float):
+    """
+    Back-fills the actual observed volatility score for an existing prediction
+    row identified by (timestamp, horizon).
+
+    Returns the number of rows updated (0 if the prediction was not found).
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE predictions
+                SET actual_outcome = %s
+                WHERE timestamp = %s AND horizon = %s
+                """,
+                (actual_outcome, timestamp, horizon),
+            )
+            updated = cur.rowcount
+        conn.commit()
+        return updated
+    except Exception as e:
+        conn.rollback()
+        print(f"Error recording actual outcome: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def get_predictions_with_actuals(pair: str, horizon: int, limit: int = 200):
+    """
+    Returns rows from predictions that have both a volatility_score AND an
+    actual_outcome, ordered oldest-first (so callers can replay them through a
+    drift monitor in chronological order).
+
+    Each row dict has keys: timestamp, horizon, volatility_score, actual_outcome, pair.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT timestamp, horizon, volatility_score, actual_outcome, pair
+                FROM predictions
+                WHERE pair = %s
+                  AND horizon = %s
+                  AND actual_outcome IS NOT NULL
+                ORDER BY timestamp ASC
+                LIMIT %s
+                """,
+                (pair, horizon, limit),
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def save_drift_event(
+    pair: str,
+    horizon: int,
+    predicted: float,
+    actual: float,
+    abs_error: float,
+    rolling_mae,
+    rolling_rmse,
+    adwin_drift_detected: bool,
+    ph_drift_detected: bool,
+    ph_statistic: float,
+    adwin_window_size: int,
+):
+    """
+    Persists a single drift-detector result to the drift_events table.
+    The ``timestamp`` column defaults to ``now()`` on the database side.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO drift_events (
+                    pair, horizon, predicted, actual, abs_error,
+                    rolling_mae, rolling_rmse,
+                    adwin_drift_detected, ph_drift_detected,
+                    ph_statistic, adwin_window_size
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    pair,
+                    horizon,
+                    predicted,
+                    actual,
+                    abs_error,
+                    rolling_mae,
+                    rolling_rmse,
+                    adwin_drift_detected,
+                    ph_drift_detected,
+                    ph_statistic,
+                    adwin_window_size,
+                ),
+            )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Error saving drift event: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def get_drift_summary(pair: str, horizon: int, limit: int = 100):
+    """
+    Returns the *limit* most recent drift events for (pair, horizon), ordered
+    most-recent first.
+
+    Each row dict has keys:
+        timestamp, pair, horizon, predicted, actual, abs_error,
+        rolling_mae, rolling_rmse, adwin_drift_detected, ph_drift_detected,
+        ph_statistic, adwin_window_size.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT timestamp, pair, horizon,
+                       predicted, actual, abs_error,
+                       rolling_mae, rolling_rmse,
+                       adwin_drift_detected, ph_drift_detected,
+                       ph_statistic, adwin_window_size
+                FROM drift_events
+                WHERE pair = %s AND horizon = %s
+                ORDER BY timestamp DESC
+                LIMIT %s
+                """,
+                (pair, horizon, limit),
             )
             return cur.fetchall()
     finally:

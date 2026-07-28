@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -38,10 +38,11 @@ def test_fetch_twitter_sentiment_without_token_returns_empty(monkeypatch):
 
 def test_fetch_news_sentiment_filters_unmatched_entries(monkeypatch):
     class FakeFeed:
-        entries = [
-            {"title": "Naira weakens further amid CBN policy shift", "summary": "Analysts warn of continued devaluation."},
-            {"title": "Local football league kicks off", "summary": "A new season begins."},
-        ]
+        def __init__(self):
+            self.entries = [
+                {"title": "Naira weakens further amid CBN policy shift", "summary": "Analysts warn of continued devaluation."},
+                {"title": "Local football league kicks off", "summary": "A new season begins."},
+            ]
 
     monkeypatch.setattr(
         "services.sentiment_ingester.NEWS_RSS_FEEDS", [("TestSource", "http://example.com/feed")]

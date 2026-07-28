@@ -16,11 +16,15 @@ CREATE TABLE IF NOT EXISTS fx_rates (
 -- Convert fx_rates to a hypertable for timeseries optimization
 SELECT create_hypertable('fx_rates', 'timestamp', if_not_exists => TRUE);
 
--- Table to store model predictions
+-- Table to store model predictions and their observed actual outcomes.
+-- actual_outcome is nullable — populated later via the outcome recording endpoint.
+-- pair identifies the FX pair the prediction relates to (e.g. 'USD/NGN').
 CREATE TABLE IF NOT EXISTS predictions (
     "timestamp" TIMESTAMPTZ NOT NULL,
-    horizon INTEGER NOT NULL, -- Prediction horizon (e.g., hours ahead)
+    horizon INTEGER NOT NULL,          -- Prediction horizon (e.g., hours ahead)
     volatility_score NUMERIC NOT NULL, -- Core volatility score (0-100)
+    pair VARCHAR(10) NOT NULL DEFAULT 'USD/NGN', -- FX pair the prediction covers
+    actual_outcome NUMERIC,            -- Observed volatility score once the period closes
     PRIMARY KEY ("timestamp", horizon)
 );
 
@@ -73,3 +77,31 @@ CREATE TABLE IF NOT EXISTS backtest_results (
 -- Indexes to support "past reports" lookups by variant
 CREATE INDEX IF NOT EXISTS idx_backtest_results_pair_created ON backtest_results (pair, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_backtest_results_strategy_created ON backtest_results (strategy_name, created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Drift monitoring
+-- ---------------------------------------------------------------------------
+
+-- Table to store individual drift-detector events and rolling accuracy metrics.
+-- One row is written for every (prediction, actual) pair that is recorded;
+-- callers can query for the latest row to get the current health of the model.
+CREATE TABLE IF NOT EXISTS drift_events (
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    pair VARCHAR(10) NOT NULL,
+    horizon INTEGER NOT NULL,
+    predicted NUMERIC NOT NULL,
+    actual NUMERIC NOT NULL,
+    abs_error NUMERIC NOT NULL,            -- |predicted - actual|
+    rolling_mae NUMERIC,                   -- MAE over recent window (NULL until window fills)
+    rolling_rmse NUMERIC,                  -- RMSE over recent window (NULL until window fills)
+    adwin_drift_detected BOOLEAN NOT NULL, -- ADWIN change-point signal
+    ph_drift_detected BOOLEAN NOT NULL,    -- Page-Hinkley upward-drift signal
+    ph_statistic NUMERIC NOT NULL,         -- Raw PH statistic at this point in time
+    adwin_window_size INTEGER NOT NULL     -- Current ADWIN adaptive window size
+);
+
+-- Convert drift_events to a hypertable for efficient time-range queries
+SELECT create_hypertable('drift_events', 'timestamp', if_not_exists => TRUE);
+
+-- Index to support pair + horizon lookups (the most common query pattern)
+CREATE INDEX IF NOT EXISTS idx_drift_events_pair_horizon ON drift_events (pair, horizon, "timestamp" DESC);

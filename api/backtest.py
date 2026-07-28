@@ -1,14 +1,13 @@
 import os
 import sys
 from datetime import date, datetime
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 # Add project root to sys.path for local imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from lib.database import get_fx_rate_series, save_backtest_result, list_backtest_results
+from lib.database import get_fx_rate_series, list_backtest_results, save_backtest_result
 from services.backtest_engine import run_backtest
 
 router = APIRouter(prefix="/backtest", tags=["backtest"])
@@ -23,6 +22,7 @@ class BacktestRequest(BaseModel):
     threshold: float = Field(80.0, ge=0, le=100, description="Volatility score above which the strategy shifts to stable")
     initial_capital: float = Field(10000.0, gt=0)
     stable_apy: float = Field(0.0, ge=0, le=100, description="Annualized yield earned while allocated to stable")
+    model_type: str = Field("realized", description="Model type used: 'realized', 'lstm', or 'gru'")
 
 
 class BacktestMetrics(BaseModel):
@@ -72,6 +72,7 @@ def create_backtest(request: BacktestRequest):
             threshold=request.threshold,
             initial_capital=request.initial_capital,
             stable_apy=request.stable_apy,
+            model_type=request.model_type,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -81,6 +82,7 @@ def create_backtest(request: BacktestRequest):
         "threshold": request.threshold,
         "initial_capital": request.initial_capital,
         "stable_apy": request.stable_apy,
+        "model_type": request.model_type,
     }
 
     record = save_backtest_result(
@@ -112,8 +114,8 @@ def create_backtest(request: BacktestRequest):
 
 @router.get("/results", response_model=list[BacktestResult])
 def get_backtest_results(
-    pair: Optional[str] = None,
-    strategy_name: Optional[str] = None,
+    pair: str | None = None,
+    strategy_name: str | None = None,
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):

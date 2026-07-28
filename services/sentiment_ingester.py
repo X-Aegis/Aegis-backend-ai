@@ -1,9 +1,10 @@
+import asyncio
 import os
 import sys
-import asyncio
-import httpx
-import feedparser
 from datetime import datetime, timezone
+
+import feedparser
+import httpx
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # Add project root to sys.path for local imports
@@ -70,7 +71,7 @@ async def fetch_twitter_sentiment():
                 for keyword in keywords:
                     records.append((timestamp, "Twitter/X", keyword, text, score))
             return records
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Error fetching from Twitter/X: {e}")
         return []
 
@@ -98,7 +99,7 @@ async def fetch_news_sentiment():
                 score = _score_text(text)
                 for keyword in keywords:
                     records.append((timestamp, source_name, keyword, text, score))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"Error fetching from {source_name}: {e}")
 
     return records

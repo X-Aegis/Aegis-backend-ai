@@ -13,3 +13,4 @@ htmlcov/
 .ipynb_checkpoints/
 *.db
 *.log
+.venv/

@@ -88,8 +88,8 @@ def test_get_backtest_results_returns_stored_reports(monkeypatch):
         "created_at": datetime(2026, 1, 6, tzinfo=timezone.utc),
         "strategy_name": "test-strategy",
         "pair": "USD/NGN",
-        "start_date": datetime(2026, 1, 1).date(),
-        "end_date": datetime(2026, 1, 5).date(),
+        "start_date": datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+        "end_date": datetime(2026, 1, 5, tzinfo=timezone.utc).date(),
         "data_points_used": 30,
         "params": {"volatility_window": 5, "threshold": 50, "initial_capital": 10000, "stable_apy": 0},
         "strategy_metrics": {
@@ -125,3 +125,33 @@ def test_get_backtest_results_returns_stored_reports(monkeypatch):
     assert data[0]["pair"] == "USD/NGN"
     assert captured["pair"] == "USD/NGN"
     assert captured["limit"] == 5
+
+
+def test_create_backtest_with_gru_model(monkeypatch):
+    rows = _series([1500.0 + (i % 4) for i in range(30)])
+    monkeypatch.setattr("api.backtest.get_fx_rate_series", lambda pair, start, end: rows)
+
+    saved = {}
+    def fake_save(**kwargs):
+        saved.update(kwargs)
+        return {"id": 2, "created_at": datetime(2026, 1, 6, tzinfo=timezone.utc)}
+
+    monkeypatch.setattr("api.backtest.save_backtest_result", fake_save)
+
+    response = client.post("/backtest", json=_request_body(model_type="gru"))
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["id"] == 2
+    assert data["params"]["model_type"] == "gru"
+    assert saved["params"]["model_type"] == "gru"
+
+
+def test_create_backtest_with_invalid_model_type(monkeypatch):
+    rows = _series([1500.0 + (i % 4) for i in range(30)])
+    monkeypatch.setattr("api.backtest.get_fx_rate_series", lambda pair, start, end: rows)
+
+    response = client.post("/backtest", json=_request_body(model_type="invalid"))
+
+    assert response.status_code == 422
+
