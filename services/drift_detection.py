@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 # Rolling accuracy metrics
 # ---------------------------------------------------------------------------
 
+
 def compute_rolling_mae(errors: Sequence[float], window: int) -> float | None:
     """Return MAE over the most recent *window* absolute errors, or None if
     fewer than *window* observations are available."""
@@ -49,12 +50,13 @@ def compute_rolling_rmse(errors: Sequence[float], window: int) -> float | None:
     if len(errors) < window:
         return None
     recent = list(errors)[-window:]
-    return math.sqrt(sum(e ** 2 for e in recent) / len(recent))
+    return math.sqrt(sum(e**2 for e in recent) / len(recent))
 
 
 # ---------------------------------------------------------------------------
 # ADWIN detector
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ADWINDetector:
@@ -125,8 +127,8 @@ class ADWINDetector:
         for cut in range(n - 1, 0, -1):
             right_sum += w[cut]
             left_sum = total - right_sum
-            n0 = n - cut   # right sub-window size
-            n1 = cut       # left sub-window size
+            n0 = n - cut  # right sub-window size
+            n1 = cut  # left sub-window size
 
             mean0 = right_sum / n0
             mean1 = left_sum / n1
@@ -148,6 +150,7 @@ class ADWINDetector:
 # ---------------------------------------------------------------------------
 # Page-Hinkley detector
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class PageHinkleyDetector:
@@ -191,7 +194,9 @@ class PageHinkleyDetector:
         """Ingest one new observation.  Returns ``True`` if drift is detected."""
         self._n += 1
         # Running mean with optional forgetting
-        self._mean = self.alpha * self._mean + (1 - self.alpha) * value if self._n > 1 else value
+        self._mean = (
+            self.alpha * self._mean + (1 - self.alpha) * value if self._n > 1 else value
+        )
 
         self._sum += value - self._mean - self.delta
         self._min_sum = min(self._min_sum, self._sum)
@@ -222,6 +227,7 @@ class PageHinkleyDetector:
 # ---------------------------------------------------------------------------
 # High-level DriftMonitor
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class DriftMonitor:
@@ -297,7 +303,9 @@ class DriftMonitor:
         for predicted, actual in pairs:
             report = self.update(predicted, actual)
         if report is None:
-            raise ValueError("bulk_update requires at least one (predicted, actual) pair.")
+            raise ValueError(
+                "bulk_update requires at least one (predicted, actual) pair."
+            )
         return report
 
     @property
@@ -320,6 +328,7 @@ class DriftMonitor:
 # ---------------------------------------------------------------------------
 # DriftReport — immutable result object
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class DriftReport:

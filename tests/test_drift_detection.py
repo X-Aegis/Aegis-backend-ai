@@ -277,7 +277,7 @@ class TestDriftMonitor:
         monitor = DriftMonitor(
             rolling_window=10,
             adwin_delta=0.002,
-            ph_lambda=5.0,   # low threshold for test speed
+            ph_lambda=5.0,  # low threshold for test speed
         )
         # Warmup with near-perfect predictions
         for _ in range(20):
@@ -289,7 +289,9 @@ class TestDriftMonitor:
             if report.drift_detected:
                 drift_fired = True
                 break
-        assert drift_fired, "DriftMonitor should detect drift after large sustained errors"
+        assert drift_fired, (
+            "DriftMonitor should detect drift after large sustained errors"
+        )
 
     def test_bulk_update_returns_final_report(self):
         monitor = DriftMonitor(rolling_window=3)

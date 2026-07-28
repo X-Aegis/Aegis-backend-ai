@@ -26,7 +26,9 @@ def test_matched_keywords_returns_empty_when_no_match():
 
 def test_score_text_positive_and_negative():
     positive = _score_text("The Naira rallied strongly and investors are optimistic.")
-    negative = _score_text("The Naira crashed and inflation fears are terrifying markets.")
+    negative = _score_text(
+        "The Naira crashed and inflation fears are terrifying markets."
+    )
     assert positive > 0
     assert negative < 0
 
@@ -40,14 +42,23 @@ def test_fetch_news_sentiment_filters_unmatched_entries(monkeypatch):
     class FakeFeed:
         def __init__(self):
             self.entries = [
-                {"title": "Naira weakens further amid CBN policy shift", "summary": "Analysts warn of continued devaluation."},
-                {"title": "Local football league kicks off", "summary": "A new season begins."},
+                {
+                    "title": "Naira weakens further amid CBN policy shift",
+                    "summary": "Analysts warn of continued devaluation.",
+                },
+                {
+                    "title": "Local football league kicks off",
+                    "summary": "A new season begins.",
+                },
             ]
 
     monkeypatch.setattr(
-        "services.sentiment_ingester.NEWS_RSS_FEEDS", [("TestSource", "http://example.com/feed")]
+        "services.sentiment_ingester.NEWS_RSS_FEEDS",
+        [("TestSource", "http://example.com/feed")],
     )
-    monkeypatch.setattr("services.sentiment_ingester.feedparser.parse", lambda url: FakeFeed())
+    monkeypatch.setattr(
+        "services.sentiment_ingester.feedparser.parse", lambda url: FakeFeed()
+    )
 
     records = asyncio.run(fetch_news_sentiment())
 

@@ -20,19 +20,25 @@ KEYWORDS = ["Naira", "devaluation", "CBN", "inflation"]
 NEWS_RSS_FEEDS = [
     ("Nairametrics", "https://nairametrics.com/feed/"),
     ("Punch Business", "https://punchng.com/topics/business/feed/"),
-    ("Reuters Africa", "https://www.reutersagency.com/feed/?best-regions=africa&post_type=best"),
+    (
+        "Reuters Africa",
+        "https://www.reutersagency.com/feed/?best-regions=africa&post_type=best",
+    ),
 ]
 
 _analyzer = SentimentIntensityAnalyzer()
+
 
 def _score_text(text):
     """Returns a compound sentiment score in the range [-1, 1]."""
     return _analyzer.polarity_scores(text)["compound"]
 
+
 def _matched_keywords(text):
     """Returns the subset of target KEYWORDS present in text (case-insensitive)."""
     lowered = text.lower()
     return [keyword for keyword in KEYWORDS if keyword.lower() in lowered]
+
 
 async def fetch_twitter_sentiment():
     """Fetches recent Twitter/X posts mentioning target keywords and scores their sentiment."""
@@ -63,7 +69,9 @@ async def fetch_twitter_sentiment():
 
                 created_at = tweet.get("created_at")
                 if created_at:
-                    timestamp = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+                    timestamp = datetime.strptime(
+                        created_at, "%Y-%m-%dT%H:%M:%S.%fZ"
+                    ).replace(tzinfo=timezone.utc)
                 else:
                     timestamp = datetime.now(timezone.utc)
 
@@ -74,6 +82,7 @@ async def fetch_twitter_sentiment():
     except Exception as e:  # noqa: BLE001
         print(f"Error fetching from Twitter/X: {e}")
         return []
+
 
 async def fetch_news_sentiment():
     """Fetches financial news RSS entries mentioning target keywords and scores their sentiment."""
@@ -104,6 +113,7 @@ async def fetch_news_sentiment():
 
     return records
 
+
 async def run_ingestion():
     """Orchestrates the sentiment ingestion process."""
     print(f"Starting sentiment data ingestion at {datetime.now(timezone.utc)}")
@@ -122,6 +132,7 @@ async def run_ingestion():
         print("Ingestion successful.")
     else:
         print("No sentiment records fetched.")
+
 
 if __name__ == "__main__":
     asyncio.run(run_ingestion())

@@ -20,7 +20,7 @@ class PredictionPoint(BaseModel):
         ge=0,
         le=100,
         description="Volatility risk score in the range [0, 100]. "
-                    "Higher values indicate greater predicted volatility.",
+        "Higher values indicate greater predicted volatility.",
     )
 
 
@@ -31,7 +31,7 @@ class CurrentRiskResponse(BaseModel):
     risk_level: str = Field(
         ...,
         description="Categorical label derived from volatility_score: "
-                    "LOW (< 40), MEDIUM (40–79), HIGH (>= 80).",
+        "LOW (< 40), MEDIUM (40–79), HIGH (>= 80).",
     )
 
 
@@ -62,7 +62,7 @@ def get_current_risk(
         raise HTTPException(
             status_code=404,
             detail=f"No predictions found for horizon={horizon}. "
-                   "The model may not have run yet.",
+            "The model may not have run yet.",
         )
 
     return CurrentRiskResponse(
@@ -76,7 +76,9 @@ def get_current_risk(
 @router.get("/history", response_model=list[PredictionPoint])
 def get_risk_history(
     horizon: int = Query(1, ge=1, description="Prediction horizon in hours ahead"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of data points to return"),
+    limit: int = Query(
+        100, ge=1, le=1000, description="Maximum number of data points to return"
+    ),
     offset: int = Query(0, ge=0, description="Number of rows to skip (for pagination)"),
 ):
     """

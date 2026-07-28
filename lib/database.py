@@ -9,9 +9,11 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+
 def get_connection():
     """Establishes a connection to the PostgreSQL/TimescaleDB database."""
     return psycopg2.connect(DATABASE_URL)
+
 
 def save_fx_rates(rates):
     """
@@ -21,9 +23,10 @@ def save_fx_rates(rates):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            execute_values(cur,
+            execute_values(
+                cur,
                 "INSERT INTO fx_rates (timestamp, pair, rate, source) VALUES %s ON CONFLICT DO NOTHING",
-                rates
+                rates,
             )
         conn.commit()
     except Exception as e:
@@ -33,6 +36,7 @@ def save_fx_rates(rates):
     finally:
         conn.close()
 
+
 def save_sentiment_data(records):
     """
     Saves a list of sentiment records to the database.
@@ -41,9 +45,10 @@ def save_sentiment_data(records):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            execute_values(cur,
+            execute_values(
+                cur,
                 "INSERT INTO sentiment_data (timestamp, source, keyword, content, sentiment_score) VALUES %s",
-                records
+                records,
             )
         conn.commit()
     except Exception as e:
@@ -52,6 +57,7 @@ def save_sentiment_data(records):
         raise
     finally:
         conn.close()
+
 
 def get_fx_rate_series(pair, start_date, end_date):
     """
@@ -74,8 +80,18 @@ def get_fx_rate_series(pair, start_date, end_date):
     finally:
         conn.close()
 
-def save_backtest_result(strategy_name, pair, start_date, end_date, data_points_used,
-                          params, strategy_metrics, baseline_metrics, comparison):
+
+def save_backtest_result(
+    strategy_name,
+    pair,
+    start_date,
+    end_date,
+    data_points_used,
+    params,
+    strategy_metrics,
+    baseline_metrics,
+    comparison,
+):
     """
     Persists a backtest report and returns its generated {id, created_at}.
     """
@@ -111,6 +127,7 @@ def save_backtest_result(strategy_name, pair, start_date, end_date, data_points_
         raise
     finally:
         conn.close()
+
 
 def get_current_prediction(horizon: int = 1):
     """
@@ -176,10 +193,10 @@ def list_backtest_results(pair=None, strategy_name=None, limit=20, offset=0):
             filters = []
             values = []
             if pair:
-                filters.append('pair = %s')
+                filters.append("pair = %s")
                 values.append(pair)
             if strategy_name:
-                filters.append('strategy_name = %s')
+                filters.append("strategy_name = %s")
                 values.append(strategy_name)
 
             where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
@@ -205,7 +222,10 @@ def list_backtest_results(pair=None, strategy_name=None, limit=20, offset=0):
 # Drift monitoring helpers
 # ---------------------------------------------------------------------------
 
-def save_prediction(timestamp, horizon: int, volatility_score: float, pair: str = "USD/NGN"):
+
+def save_prediction(
+    timestamp, horizon: int, volatility_score: float, pair: str = "USD/NGN"
+):
     """
     Inserts a live model prediction into the predictions table.
     actual_outcome is left NULL and can be filled in later via

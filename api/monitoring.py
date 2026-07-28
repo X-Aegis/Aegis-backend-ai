@@ -78,7 +78,9 @@ class OutcomeIn(BaseModel):
     rolling_window: int = Field(
         50, ge=5, le=500, description="Window size for rolling MAE / RMSE"
     )
-    adwin_delta: float = Field(0.002, gt=0, lt=1, description="ADWIN confidence parameter")
+    adwin_delta: float = Field(
+        0.002, gt=0, lt=1, description="ADWIN confidence parameter"
+    )
     ph_lambda: float = Field(50.0, gt=0, description="Page-Hinkley detection threshold")
 
 
@@ -177,11 +179,15 @@ def record_outcome(body: OutcomeIn):
 
     # 2. Re-fetch all paired rows to rebuild the monitor state chronologically.
     #    We try to infer the pair from the most-recently returned rows.
-    all_rows = get_predictions_with_actuals(pair="USD/NGN", horizon=body.horizon, limit=500)
+    all_rows = get_predictions_with_actuals(
+        pair="USD/NGN", horizon=body.horizon, limit=500
+    )
     # If no rows matched "USD/NGN" (pair may differ), fall back to re-querying
     # without pair filter — rare edge case handled gracefully.
     if not all_rows:
-        all_rows = get_predictions_with_actuals(pair="USD/NGN", horizon=body.horizon, limit=500)
+        all_rows = get_predictions_with_actuals(
+            pair="USD/NGN", horizon=body.horizon, limit=500
+        )
 
     pair = all_rows[0]["pair"] if all_rows else "USD/NGN"
 
@@ -247,7 +253,9 @@ def record_outcome(body: OutcomeIn):
 def get_drift_events(
     pair: str = Query("USD/NGN", description="FX pair, e.g. 'USD/NGN'"),
     horizon: int = Query(1, ge=1, description="Prediction horizon in hours ahead"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of events to return"),
+    limit: int = Query(
+        100, ge=1, le=1000, description="Maximum number of events to return"
+    ),
 ):
     """
     Retrieve the most recent drift events for a given ``(pair, horizon)``.
@@ -268,8 +276,12 @@ def get_drift_events(
             predicted=float(row["predicted"]),
             actual=float(row["actual"]),
             abs_error=float(row["abs_error"]),
-            rolling_mae=float(row["rolling_mae"]) if row["rolling_mae"] is not None else None,
-            rolling_rmse=float(row["rolling_rmse"]) if row["rolling_rmse"] is not None else None,
+            rolling_mae=float(row["rolling_mae"])
+            if row["rolling_mae"] is not None
+            else None,
+            rolling_rmse=float(row["rolling_rmse"])
+            if row["rolling_rmse"] is not None
+            else None,
             adwin_drift_detected=row["adwin_drift_detected"],
             ph_drift_detected=row["ph_drift_detected"],
             ph_statistic=float(row["ph_statistic"]),

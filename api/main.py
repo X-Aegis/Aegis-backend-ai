@@ -16,6 +16,7 @@ app.include_router(backtest_router)
 app.include_router(risk_router)
 app.include_router(monitoring_router)
 
+
 @app.get("/")
 def root():
     return {"status": "ok", "service": "x-aegis-backend"}
