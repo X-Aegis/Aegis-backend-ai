@@ -66,9 +66,9 @@ def test_run_backtest_with_lstm_model():
     calm = [1500.0 + (i % 3) * 0.01 for i in range(15)]
     spike = [1500.0 * (1.05 ** i) for i in range(1, 10)]
     rows = _series(calm + spike, step=timedelta(days=1))
-    
+
     result = run_backtest(rows, volatility_window=5, threshold=50, initial_capital=10000, stable_apy=5, model_type="lstm")
-    
+
     assert result["data_points_used"] == len(rows)
     assert result["strategy_metrics"]["final_value"] > 0
     assert "return_improvement_pct" in result["comparison"]
@@ -78,9 +78,9 @@ def test_run_backtest_with_gru_model():
     calm = [1500.0 + (i % 3) * 0.01 for i in range(15)]
     spike = [1500.0 * (1.05 ** i) for i in range(1, 10)]
     rows = _series(calm + spike, step=timedelta(days=1))
-    
+
     result = run_backtest(rows, volatility_window=5, threshold=50, initial_capital=10000, stable_apy=5, model_type="gru")
-    
+
     assert result["data_points_used"] == len(rows)
     assert result["strategy_metrics"]["final_value"] > 0
     assert "return_improvement_pct" in result["comparison"]
@@ -90,3 +90,36 @@ def test_run_backtest_raises_on_invalid_model_type():
     rows = _series([1500.0] * 20)
     with pytest.raises(ValueError, match="Invalid model_type"):
         run_backtest(rows, volatility_window=5, threshold=50, initial_capital=10000, stable_apy=0, model_type="invalid")
+
+
+def test_run_backtest_reports_sharpe_and_win_rate_metrics():
+    rows = _series([1500.0 + (i % 4) for i in range(30)])
+    result = run_backtest(rows, volatility_window=5, threshold=50, initial_capital=10000, stable_apy=0)
+
+    for metrics in (result["strategy_metrics"], result["baseline_metrics"]):
+        assert "sharpe_ratio" in metrics
+        assert "win_rate_pct" in metrics
+        assert 0.0 <= metrics["win_rate_pct"] <= 100.0
+
+    assert "sharpe_improvement" in result["comparison"]
+
+
+def test_run_backtest_flat_series_has_zero_sharpe_and_win_rate():
+    rows = _series([1500.0] * 20)
+    result = run_backtest(rows, volatility_window=5, threshold=80, initial_capital=10000, stable_apy=0)
+
+    # No dispersion and no positive periods -> both metrics collapse to 0.
+    assert result["baseline_metrics"]["sharpe_ratio"] == pytest.approx(0.0, abs=1e-12)
+    assert result["baseline_metrics"]["win_rate_pct"] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_run_backtest_win_rate_counts_only_up_periods():
+    # Strictly rising rate means the local currency weakens every period, so a
+    # buy-and-hold (baseline) USD portfolio loses value every single period.
+    rows = _series([1500.0 * (1.01 ** i) for i in range(20)])
+    result = run_backtest(rows, volatility_window=5, threshold=101, initial_capital=10000, stable_apy=0)
+
+    # threshold=101 is never crossed, so the strategy never shields -> identical
+    # to buy-and-hold, and no period ever ends positive.
+    assert result["baseline_metrics"]["win_rate_pct"] == pytest.approx(0.0, abs=1e-12)
+

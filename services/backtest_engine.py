@@ -112,12 +112,24 @@ def _simulate(df, threshold, initial_capital, stable_apy, strategy_enabled):
         value *= (1 + period_return)
         values.append(value)
 
+    period_returns = [(values[i] / values[i - 1]) - 1 for i in range(1, len(values))]
+    if period_returns:
+        arr = np.array(period_returns)
+        std = arr.std()
+        sharpe_ratio = float((arr.mean() / std) if std > 0 else 0.0)
+        win_rate_pct = float((arr > 0).sum() / len(arr) * 100)
+    else:
+        sharpe_ratio = 0.0
+        win_rate_pct = 0.0
+
     return {
         "final_value": value,
         "total_return_pct": (value / initial_capital - 1) * 100,
         "max_drawdown_pct": _max_drawdown_pct(values),
         "num_regime_switches": switches if strategy_enabled else 0,
         "time_in_stable_pct": (stable_periods / total_periods * 100) if strategy_enabled and total_periods else 0.0,
+        "sharpe_ratio": sharpe_ratio,
+        "win_rate_pct": win_rate_pct,
     }
 
 
@@ -158,6 +170,7 @@ def run_backtest(rate_rows, volatility_window, threshold, initial_capital, stabl
     comparison = {
         "return_improvement_pct": strategy_metrics["total_return_pct"] - baseline_metrics["total_return_pct"],
         "drawdown_reduction_pct": baseline_metrics["max_drawdown_pct"] - strategy_metrics["max_drawdown_pct"],
+        "sharpe_improvement": strategy_metrics["sharpe_ratio"] - baseline_metrics["sharpe_ratio"],
     }
 
     return {
