@@ -9,7 +9,7 @@ prophet
 python-dotenv
 httpx
 pydantic
-soroban-sdk
+soroban-sdk>=0.0.1.dev0
 feedparser
 vaderSentiment
 pytest
