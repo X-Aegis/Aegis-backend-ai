@@ -5,7 +5,6 @@ uvicorn[standard]
 pandas
 numpy
 scikit-learn
-prophet
 python-dotenv
 httpx
 pydantic
@@ -13,3 +12,9 @@ soroban-sdk>=0.0.1.dev0
 feedparser
 vaderSentiment
 pytest
+stellar-sdk
+feedparser
+vaderSentiment
+boto3
+pytest
+pytest-asyncio

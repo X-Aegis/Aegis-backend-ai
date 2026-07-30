@@ -72,6 +72,32 @@ def _max_drawdown_pct(values):
     return float(abs(drawdowns.min()) * 100) if len(drawdowns) else 0.0
 
 
+def _sharpe_ratio(period_returns, periods_per_year):
+    """
+    Annualized Sharpe ratio of the per-period returns, with the risk-free rate
+    assumed to be 0 (a common simplification over the short FX horizons here).
+
+    The per-period Sharpe (mean / sample std of returns) is scaled by
+    sqrt(periods_per_year) to annualize. Returns 0.0 when fewer than two
+    periods exist or the returns have no dispersion (undefined ratio).
+    """
+    returns = np.asarray(period_returns, dtype=float)
+    if len(returns) < 2:
+        return 0.0
+    std = returns.std(ddof=1)
+    if std == 0:
+        return 0.0
+    return float(returns.mean() / std * np.sqrt(periods_per_year))
+
+
+def _win_rate_pct(period_returns):
+    """Percentage of periods that ended with a strictly positive return."""
+    returns = np.asarray(period_returns, dtype=float)
+    if len(returns) == 0:
+        return 0.0
+    return float((returns > 0).sum() / len(returns) * 100)
+
+
 def _simulate(df, threshold, initial_capital, stable_apy, strategy_enabled):
     """
     Simulates a portfolio walking forward through df's periods.
@@ -91,14 +117,17 @@ def _simulate(df, threshold, initial_capital, stable_apy, strategy_enabled):
 
     value = initial_capital
     values = [value]
+    period_returns = []
     in_stable = False
     switches = 0
     stable_periods = 0
+    total_elapsed_days = 0.0
     total_periods = len(df) - 1
 
     for i in range(1, len(df)):
         prev_rate, curr_rate = rates[i - 1], rates[i]
         elapsed_days = (timestamps[i] - timestamps[i - 1]).total_seconds() / 86400.0
+        total_elapsed_days += elapsed_days
 
         should_be_stable = (
             strategy_enabled and scores[i - 1] is not None and scores[i - 1] > threshold
@@ -131,6 +160,8 @@ def _simulate(df, threshold, initial_capital, stable_apy, strategy_enabled):
         "final_value": value,
         "total_return_pct": (value / initial_capital - 1) * 100,
         "max_drawdown_pct": _max_drawdown_pct(values),
+        "sharpe_ratio": _sharpe_ratio(period_returns, periods_per_year),
+        "win_rate_pct": _win_rate_pct(period_returns),
         "num_regime_switches": switches if strategy_enabled else 0,
         "time_in_stable_pct": (stable_periods / total_periods * 100)
         if strategy_enabled and total_periods

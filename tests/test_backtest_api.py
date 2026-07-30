@@ -109,6 +109,8 @@ def test_get_backtest_results_returns_stored_reports(monkeypatch):
             "final_value": 10500.0,
             "total_return_pct": 5.0,
             "max_drawdown_pct": 1.0,
+            "sharpe_ratio": 1.5,
+            "win_rate_pct": 55.0,
             "num_regime_switches": 2,
             "time_in_stable_pct": 10.0,
         },
@@ -116,10 +118,12 @@ def test_get_backtest_results_returns_stored_reports(monkeypatch):
             "final_value": 10200.0,
             "total_return_pct": 2.0,
             "max_drawdown_pct": 3.0,
+            "sharpe_ratio": 0.8,
+            "win_rate_pct": 48.0,
             "num_regime_switches": 0,
             "time_in_stable_pct": 0.0,
         },
-        "comparison": {"return_improvement_pct": 3.0, "drawdown_reduction_pct": 2.0},
+        "comparison": {"return_improvement_pct": 3.0, "drawdown_reduction_pct": 2.0, "sharpe_improvement": 0.7},
     }
 
     captured = {}
