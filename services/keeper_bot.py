@@ -2,10 +2,17 @@
 Keeper Bot — Off-chain worker (BK-5)
 
 Polls the Model API every hour. When the volatility-derived allocation
-recommendation changes by more than REBALANCE_THRESHOLD, it:
+recommendation changes by more than REBALANCE_THRESHOLD, or when the
+volatility score crosses HIGH_VOLATILITY_CUTOFF, it:
   1. Builds a `rebalance` transaction payload.
   2. Signs it via AWS KMS or HashiCorp Vault (configurable).
   3. Submits the signed transaction to the Soroban RPC endpoint.
+
+Idempotency: tracks the last signal window (by API response timestamp) to
+prevent double-rebalancing for the same volatility signal.
+
+Retry: failed transaction submissions are retried up to MAX_RETRIES times
+with exponential backoff.
 """
 
 import asyncio
@@ -63,8 +70,16 @@ HIGH_VOLATILITY_CUTOFF: float = float(os.getenv("HIGH_VOLATILITY_CUTOFF", "80.0"
 
 POLL_INTERVAL_SECONDS: int = int(os.getenv("POLL_INTERVAL_SECONDS", "3600"))  # 1 hour
 
+# Policy guards (BK-10a)
 MAX_REBALANCES_PER_24H = 4
 MAX_ALLOCATION_CHANGE_PCT = 20.0
+
+# Retry policy
+MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "3"))
+"""Maximum number of submission retries before giving up."""
+
+RETRY_BACKOFF_BASE: float = float(os.getenv("RETRY_BACKOFF_BASE", "2.0"))
+"""Base seconds for exponential backoff between retries."""
 
 # Soroban RPC
 SOROBAN_RPC_URL: str = os.getenv(
@@ -191,7 +206,8 @@ def execute_rebalance_transaction(
             f"Transaction submission failed: {send_response['errorResultXdr']}"
         )
 
-    log.info("Transaction submitted! Hash: %s", send_response.get("hash"))
+    tx_hash = send_response.get("hash")
+    log.info("Transaction submitted successfully! tx_hash=%s", tx_hash)
     return send_response
 
 
@@ -200,8 +216,16 @@ def execute_rebalance_transaction(
 # ---------------------------------------------------------------------------
 
 
-async def fetch_volatility_score() -> float:
-    """Fetches the latest volatility score from the Model API."""
+async def fetch_volatility_score() -> tuple[float, datetime]:
+    """Fetches the latest volatility score from the Model API.
+
+    Returns
+    -------
+    tuple[float, datetime]
+        A tuple of (volatility_score, signal_timestamp) where signal_timestamp
+        is the timestamp of the prediction from the API, used as the signal
+        window key for idempotency.
+    """
     url = f"{MODEL_API_BASE_URL}/risk/current"
     params = {"horizon": RISK_HORIZON}
 
@@ -211,13 +235,22 @@ async def fetch_volatility_score() -> float:
         data = response.json()
 
     score = float(data["volatility_score"])
+    timestamp_str = data["timestamp"]
+
+    # Parse ISO timestamp — handle both Z suffix and +00:00
+    if isinstance(timestamp_str, str):
+        ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+    else:
+        ts = datetime.now(timezone.utc)
+
     log.info(
-        "Fetched volatility score: %.2f (risk_level=%s, horizon=%dh)",
+        "Fetched volatility score: %.2f (risk_level=%s, horizon=%dh, ts=%s)",
         score,
         data.get("risk_level", "?"),
         RISK_HORIZON,
+        ts.isoformat(),
     )
-    return score
+    return score, ts
 
 
 # ---------------------------------------------------------------------------
@@ -226,10 +259,12 @@ async def fetch_volatility_score() -> float:
 
 
 class KeeperBot:
-    """Stateful keeper that remembers the last submitted allocation."""
+    """Stateful keeper that remembers the last submitted allocation and
+    tracks signal windows for idempotency."""
 
     def __init__(self, now_fn=None) -> None:
         self._last_allocation: float | None = None
+        self._last_signal_window: datetime | None = None
         self._now = now_fn or (lambda: datetime.now(timezone.utc))
 
     def _policy_checks(
@@ -279,6 +314,110 @@ class KeeperBot:
         except Exception as exc:  # noqa: BLE001 - audit failure must not crash the loop
             log.error("Failed to write signing audit log: %s", exc)
 
+    def _should_rebalance(
+        self, score: float, target: float, signal_ts: datetime
+    ) -> bool:
+        """Determine whether a rebalance should be triggered.
+
+        Triggers when:
+        1. The volatility score crosses the HIGH_VOLATILITY_CUTOFF threshold, OR
+        2. The allocation delta exceeds REBALANCE_THRESHOLD.
+
+        Returns False if we already rebalanced for this signal window.
+        """
+        # Idempotency: skip if this exact signal window was already processed
+        if self._last_signal_window is not None and signal_ts <= self._last_signal_window:
+            log.info(
+                "Signal window %s is not newer than last processed (%s) — skipping.",
+                signal_ts.isoformat(),
+                self._last_signal_window.isoformat(),
+            )
+            return False
+
+        # Threshold trigger: score exceeds cutoff → always rebalance
+        if score >= HIGH_VOLATILITY_CUTOFF:
+            log.info(
+                "Volatility score %.2f >= threshold %.2f — triggering rebalance.",
+                score,
+                HIGH_VOLATILITY_CUTOFF,
+            )
+            return True
+
+        # Allocation delta trigger
+        if self._last_allocation is not None:
+            delta = abs(target - self._last_allocation)
+            if delta >= REBALANCE_THRESHOLD:
+                log.info(
+                    "Allocation change %.2f%% >= threshold %.2f%% — triggering rebalance.",
+                    delta,
+                    REBALANCE_THRESHOLD,
+                )
+                return True
+            log.info(
+                "Allocation delta %.2f%% < threshold %.2f%% — no rebalance needed.",
+                delta,
+                REBALANCE_THRESHOLD,
+            )
+            return False
+
+        # First run — submit initial allocation
+        log.info("First run — submitting initial allocation.")
+        return True
+
+    async def _submit_with_retry(
+        self,
+        target_stable_pct: float,
+        volatility_score: float,
+        contract_id: str,
+        source_secret: str,
+    ) -> dict | None:
+        """Attempt to submit a rebalance transaction with retries.
+
+        Uses exponential backoff between attempts. Returns the transaction
+        response dict on success, or None if all retries are exhausted.
+        """
+        last_error: Exception | None = None
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                log.info(
+                    "Submitting rebalance tx (attempt %d/%d)...",
+                    attempt,
+                    MAX_RETRIES,
+                )
+                result = execute_rebalance_transaction(
+                    target_stable_pct=target_stable_pct,
+                    volatility_score=volatility_score,
+                    contract_id=contract_id,
+                    source_secret=source_secret,
+                )
+                tx_hash = result.get("hash", "unknown")
+                log.info(
+                    "Rebalance tx succeeded on attempt %d. tx_hash=%s",
+                    attempt,
+                    tx_hash,
+                )
+                return result
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                log.warning(
+                    "Rebalance tx attempt %d/%d failed: %s",
+                    attempt,
+                    MAX_RETRIES,
+                    exc,
+                )
+                if attempt < MAX_RETRIES:
+                    backoff = RETRY_BACKOFF_BASE ** attempt
+                    log.info("Retrying in %.1f seconds...", backoff)
+                    await asyncio.sleep(backoff)
+
+        log.error(
+            "All %d submission attempts failed. Last error: %s",
+            MAX_RETRIES,
+            last_error,
+        )
+        return None
+
     async def run_once(self) -> None:
         """Single poll-and-rebalance cycle."""
         # 0. Check circuit breaker and dead-man switch
@@ -303,7 +442,7 @@ class KeeperBot:
 
         # 1. Fetch current volatility score
         try:
-            score = await fetch_volatility_score()
+            score, signal_ts = await fetch_volatility_score()
         except (httpx.RequestError, httpx.HTTPStatusError, KeyError, ValueError) as exc:
             log.error("Failed to fetch volatility score: %s", exc)
             return
@@ -323,29 +462,9 @@ class KeeperBot:
             log.warning("Rebalance rejected by keeper policy: %s", checks)
             return
 
-        # 3. Skip if change is below threshold
-        if current_allocation is not None:
-            delta = abs(target - current_allocation)
-            if delta < REBALANCE_THRESHOLD:
-                checks["rebalance_threshold"] = {
-                    "passed": False,
-                    "change_percentage_points": delta,
-                    "min_percentage_points": REBALANCE_THRESHOLD,
-                }
-                record_keeper_decision(score, proposed_allocations, checks, "rejected")
-                log.info(
-                    "Allocation delta %.2f %% < threshold %.2f %% — no rebalance needed.",
-                    delta,
-                    REBALANCE_THRESHOLD,
-                )
-                return
-            log.info(
-                "Allocation change %.2f %% >= threshold %.2f %% — triggering rebalance.",
-                delta,
-                REBALANCE_THRESHOLD,
-            )
-        else:
-            log.info("First run — submitting initial allocation.")
+        # 3. Check if rebalance is warranted (includes idempotency check)
+        if not self._should_rebalance(score, target, signal_ts):
+            return
 
         checks["rebalance_threshold"] = {
             "passed": True,
@@ -381,17 +500,18 @@ class KeeperBot:
             log.error("Signing key revoked — refusing to sign rebalance: %s", exc)
             return
 
-        # 5. Build, sign, and submit via Stellar SDK
-        try:
-            # We run this synchronous stellar-sdk process in the asyncio loop thread
-            # since this bot only polls once an hour and won't block high-traffic endpoints.
-            send_response = execute_rebalance_transaction(
-                target_stable_pct=target,
-                volatility_score=score,
-                contract_id=SOROBAN_CONTRACT_ID,
-                source_secret=ADMIN_SECRET_KEY,
-            )
+        # 5. Build, sign, and submit via Stellar SDK (with retries)
+        result = await self._submit_with_retry(
+            target_stable_pct=target,
+            volatility_score=score,
+            contract_id=SOROBAN_CONTRACT_ID,
+            source_secret=ADMIN_SECRET_KEY,
+        )
+
+        if result is not None:
             self._last_allocation = target
+            self._last_signal_window = signal_ts
+            tx_hash = result.get("hash", "unknown")
             checks["submission"] = {"passed": True}
             record_keeper_decision(
                 score,
@@ -401,23 +521,31 @@ class KeeperBot:
                 transaction_submitted=True,
             )
             log.info(
-                "Rebalance submitted successfully. New allocation: %.1f %% stable.",
+                "Rebalance complete. tx_hash=%s, new allocation=%.1f%% stable, signal_window=%s",
+                tx_hash,
                 target,
+                signal_ts.isoformat(),
             )
             record_keeper_heartbeat()
-            self._record_signing_audit(send_response)
-        except Exception as exc:  # noqa: BLE001 - keep the hourly loop alive on any SDK error
-            log.error("Soroban transaction failed: %s", exc)
-            checks["submission"] = {"passed": False, "error": str(exc)}
+            self._record_signing_audit(result)
+        else:
+            log.error(
+                "Rebalance failed after %d attempts — allocation unchanged.",
+                MAX_RETRIES,
+            )
+            checks["submission"] = {"passed": False, "error": f"All {MAX_RETRIES} attempts failed"}
             record_keeper_decision(score, proposed_allocations, checks, "rejected")
             record_keeper_failure()
 
     async def run(self) -> None:
         """Main loop: poll every POLL_INTERVAL_SECONDS."""
         log.info(
-            "Keeper bot starting — poll interval: %ds, rebalance threshold: %.1f %%",
+            "Keeper bot starting — poll interval: %ds, rebalance threshold: %.1f %%, "
+            "volatility cutoff: %.1f, max retries: %d",
             POLL_INTERVAL_SECONDS,
             REBALANCE_THRESHOLD,
+            HIGH_VOLATILITY_CUTOFF,
+            MAX_RETRIES,
         )
         try:
             start_keeper_metrics_server()
