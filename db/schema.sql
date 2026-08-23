@@ -105,3 +105,30 @@ SELECT create_hypertable('drift_events', 'timestamp', if_not_exists => TRUE);
 
 -- Index to support pair + horizon lookups (the most common query pattern)
 CREATE INDEX IF NOT EXISTS idx_drift_events_pair_horizon ON drift_events (pair, horizon, "timestamp" DESC);
+
+-- ---------------------------------------------------------------------------
+-- Keeper Bot Security & Key Management
+-- ---------------------------------------------------------------------------
+
+-- Table to store current keeper configuration including the active signing key hash
+CREATE TABLE IF NOT EXISTS keeper_config (
+    id SERIAL PRIMARY KEY,
+    active_key_hash VARCHAR(255) NOT NULL,
+    key_alias VARCHAR(100) NOT NULL,
+    rotation_timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status VARCHAR(20) NOT NULL DEFAULT 'active' -- 'active' or 'revoked'
+);
+
+-- Table to audit every transaction signing operation
+CREATE TABLE IF NOT EXISTS audit_signing_log (
+    id BIGSERIAL PRIMARY KEY,
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    tx_hash VARCHAR(64) NOT NULL,
+    key_id VARCHAR(255) NOT NULL,
+    actor VARCHAR(100) NOT NULL,
+    status VARCHAR(50) NOT NULL
+);
+
+-- Index for quick lookups of signing logs
+CREATE INDEX IF NOT EXISTS idx_audit_signing_log_tx_hash ON audit_signing_log (tx_hash);
+CREATE INDEX IF NOT EXISTS idx_audit_signing_log_timestamp ON audit_signing_log ("timestamp" DESC);
