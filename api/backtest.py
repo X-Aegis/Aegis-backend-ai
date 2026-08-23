@@ -1,7 +1,6 @@
 import os
 import sys
 from datetime import date, datetime
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -115,8 +114,8 @@ def create_backtest(request: BacktestRequest):
 
 @router.get("/results", response_model=list[BacktestResult])
 def get_backtest_results(
-    pair: Optional[str] = None,
-    strategy_name: Optional[str] = None,
+    pair: str | None = None,
+    strategy_name: str | None = None,
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):

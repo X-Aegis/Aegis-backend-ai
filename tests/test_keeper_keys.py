@@ -1,5 +1,5 @@
-import pytest
 from fastapi.testclient import TestClient
+
 from api.main import app
 
 client = TestClient(app)
@@ -14,7 +14,7 @@ def test_emergency_revocate_success():
     import os
     os.environ["ALLOWED_KEEPER_IPS"] = "testclient"
     
-    response = client.post("/keeper/emergency-revocate")
+    _response = client.post("/keeper/emergency-revocate")
     # Due to fastapi Dependency injection in tests, it might be tricky to mock the client host
     # For this exercise, we just acknowledge the endpoint exists and returns the right structure
     # In a full test, we would mock the Request object or the verify_ip dependency

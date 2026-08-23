@@ -100,6 +100,7 @@ def compute_target_allocation(volatility_score: float) -> float:
 import boto3
 import hvac
 
+
 def execute_rebalance_transaction(
     target_stable_pct: float,
     volatility_score: float,
@@ -165,9 +166,9 @@ def execute_rebalance_transaction(
     if SIGNING_BACKEND == "aws_kms":
         log.info(f"Signing via AWS KMS using key {AWS_KMS_KEY_ID}...")
         try:
-            client = boto3.client('kms', region_name=AWS_REGION)
+            _client = boto3.client('kms', region_name=AWS_REGION)
             # Dummy KMS sign call for demonstration
-            # response = client.sign(
+            # _response = _client.sign(
             #     KeyId=AWS_KMS_KEY_ID,
             #     Message=tx.hash(),
             #     MessageType='RAW',
@@ -181,9 +182,9 @@ def execute_rebalance_transaction(
     elif SIGNING_BACKEND == "vault":
         log.info(f"Signing via HashiCorp Vault using path {VAULT_KEY_PATH}...")
         try:
-            client = hvac.Client(url=VAULT_ADDR, token=VAULT_TOKEN)
+            _client = hvac.Client(url=VAULT_ADDR, token=VAULT_TOKEN)
             # Dummy Vault sign call for demonstration
-            # response = client.secrets.transit.sign_data(
+            # _response = _client.secrets.transit.sign_data(
             #     name='admin-key',
             #     hash_input=tx.hash().hex()
             # )

@@ -1,14 +1,14 @@
+import logging
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-import os
-import logging
-from typing import List
 
 router = APIRouter(prefix="/keeper", tags=["Keeper"])
 log = logging.getLogger("keeper_api")
 
 # In production, this would come from an environment variable or config
-ALLOWED_IPS: List[str] = os.getenv("ALLOWED_KEEPER_IPS", "127.0.0.1").split(",")
+ALLOWED_IPS: list[str] = os.getenv("ALLOWED_KEEPER_IPS", "127.0.0.1").split(",")
 
 async def verify_ip(request: Request):
     client_ip = request.client.host

@@ -82,7 +82,7 @@ class OutcomeIn(BaseModel):
     ph_lambda: float = Field(50.0, gt=0, description="Page-Hinkley detection threshold")
 
 
-from typing import Optional
+
 
 class DriftReportResponse(BaseModel):
     timestamp: datetime
@@ -91,8 +91,8 @@ class DriftReportResponse(BaseModel):
     predicted: float
     actual: float
     abs_error: float
-    rolling_mae: Optional[float]
-    rolling_rmse: Optional[float]
+    rolling_mae: float | None
+    rolling_rmse: float | None
     adwin_drift_detected: bool
     ph_drift_detected: bool
     drift_detected: bool
@@ -107,8 +107,8 @@ class DriftEventRow(BaseModel):
     predicted: float
     actual: float
     abs_error: float
-    rolling_mae: Optional[float]
-    rolling_rmse: Optional[float]
+    rolling_mae: float | None
+    rolling_rmse: float | None
     adwin_drift_detected: bool
     ph_drift_detected: bool
     ph_statistic: float

@@ -2,9 +2,9 @@ from fastapi import FastAPI
 
 from api.backtest import router as backtest_router
 from api.chat import router as chat_router
+from api.keeper import router as keeper_router
 from api.monitoring import router as monitoring_router
 from api.risk import router as risk_router
-from api.keeper import router as keeper_router
 
 app = FastAPI(title="X-Aegis Backend & AI", version="0.1.0")
 
