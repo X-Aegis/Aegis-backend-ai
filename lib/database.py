@@ -373,3 +373,41 @@ def get_drift_summary(pair: str, horizon: int, limit: int = 100):
             return cur.fetchall()
     finally:
         conn.close()
+
+# ---------------------------------------------------------------------------
+# Keeper Bot Key Management
+# ---------------------------------------------------------------------------
+
+def get_keeper_key_status(key_id: str) -> str:
+    """Returns the status of a given keeper config key."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT status FROM keeper_config WHERE key_alias = %s", (key_id,))
+            row = cur.fetchone()
+            if row:
+                return row["status"]
+            return "active" # Assume active if not explicitly in table yet
+    finally:
+        conn.close()
+
+def record_audit_log(tx_hash: str, backend_used: str, key_identifier: str, status: str, error_message: str = None):
+    """
+    Records an immutable audit log entry for a signing operation.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO audit_signing_log (tx_hash, key_id, actor, status)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (tx_hash, key_identifier, backend_used, status),
+            )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Error saving audit log: {e}")
+    finally:
+        conn.close()

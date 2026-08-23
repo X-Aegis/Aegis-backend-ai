@@ -82,8 +82,6 @@ class OutcomeIn(BaseModel):
     ph_lambda: float = Field(50.0, gt=0, description="Page-Hinkley detection threshold")
 
 
-
-
 class DriftReportResponse(BaseModel):
     timestamp: datetime
     horizon: int

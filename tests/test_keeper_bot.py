@@ -109,6 +109,88 @@ class TestExecuteRebalanceTransaction:
         assert fake_tx.soroban_data == "footprint-data"
         assert result == fake_send
 
+    def test_builds_and_submits_transaction_kms(self, monkeypatch):
+        fake_tx = Mock()
+        fake_tx.hash.return_value = b'testhash'
+        fake_tx.signatures = []
+        
+        fake_sim = Mock()
+        fake_sim.error = None
+        fake_sim.transactionData = "footprint-data"
+        fake_sim.minResourceFee = 1000
+
+        fake_send = {"hash": "abc123kms"}
+
+        fake_server = Mock()
+        fake_server.load_account.return_value = Mock()
+        fake_server.simulate_transaction.return_value = fake_sim
+        fake_server.send_transaction.return_value = fake_send
+
+        fake_kms_client = Mock()
+        fake_kms_client.sign.return_value = {'Signature': b'fakesig'}
+        
+        monkeypatch.setattr(kb, "SIGNING_BACKEND", "aws_kms")
+        monkeypatch.setattr(kb, "AWS_KMS_KEY_ID", "kms-key")
+        monkeypatch.setattr(kb, "SOROBAN_SOURCE_ACCOUNT", TEST_PUBLIC_KEY)
+        monkeypatch.setattr(kb, "Server", lambda url: fake_server)
+        monkeypatch.setattr(kb.boto3, "client", lambda service, region_name: fake_kms_client)
+        monkeypatch.setattr(kb, "get_keeper_key_status", lambda k: "active")
+        monkeypatch.setattr(kb, "record_audit_log", Mock())
+        monkeypatch.setattr(kb, "TransactionBuilder", Mock())
+        
+        kb.TransactionBuilder.return_value.append_invoke_contract_function_op.return_value.set_timeout.return_value.build.return_value = fake_tx
+
+        result = kb.execute_rebalance_transaction(
+            target_stable_pct=100.0,
+            volatility_score=85.5,
+            contract_id="CONTRACT_XYZ",
+            source_secret="",
+        )
+        assert len(fake_tx.signatures) == 1
+        assert result == fake_send
+        kb.record_audit_log.assert_called_once_with('7465737468617368', 'aws_kms', 'kms-key', 'SUCCESS')
+
+    def test_builds_and_submits_transaction_vault(self, monkeypatch):
+        fake_tx = Mock()
+        fake_tx.hash.return_value = b'testhash'
+        fake_tx.signatures = []
+        
+        fake_sim = Mock()
+        fake_sim.error = None
+        fake_sim.transactionData = "footprint-data"
+        fake_sim.minResourceFee = 1000
+
+        fake_send = {"hash": "abc123vault"}
+
+        fake_server = Mock()
+        fake_server.load_account.return_value = Mock()
+        fake_server.simulate_transaction.return_value = fake_sim
+        fake_server.send_transaction.return_value = fake_send
+
+        fake_vault_client = Mock()
+        fake_vault_client.secrets.transit.sign_data.return_value = {'data': {'signature': 'vault:v1:ZmFrZXNpZw=='}} # 'fakesig' base64 encoded
+        
+        monkeypatch.setattr(kb, "SIGNING_BACKEND", "vault")
+        monkeypatch.setattr(kb, "VAULT_KEY_PATH", "vault-key")
+        monkeypatch.setattr(kb, "SOROBAN_SOURCE_ACCOUNT", TEST_PUBLIC_KEY)
+        monkeypatch.setattr(kb, "Server", lambda url: fake_server)
+        monkeypatch.setattr(kb.hvac, "Client", lambda url, token: fake_vault_client)
+        monkeypatch.setattr(kb, "get_keeper_key_status", lambda k: "active")
+        monkeypatch.setattr(kb, "record_audit_log", Mock())
+        monkeypatch.setattr(kb, "TransactionBuilder", Mock())
+        
+        kb.TransactionBuilder.return_value.append_invoke_contract_function_op.return_value.set_timeout.return_value.build.return_value = fake_tx
+
+        result = kb.execute_rebalance_transaction(
+            target_stable_pct=100.0,
+            volatility_score=85.5,
+            contract_id="CONTRACT_XYZ",
+            source_secret="",
+        )
+        assert len(fake_tx.signatures) == 1
+        assert result == fake_send
+        kb.record_audit_log.assert_called_once_with('7465737468617368', 'vault', 'vault-key', 'SUCCESS')
+
     def test_raises_when_simulation_fails(self, monkeypatch):
         fake_keypair = Mock()
         fake_keypair.public_key = TEST_PUBLIC_KEY
