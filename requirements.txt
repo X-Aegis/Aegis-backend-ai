@@ -13,3 +13,4 @@ vaderSentiment
 boto3
 pytest
 pytest-asyncio
+pyyaml
