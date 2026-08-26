@@ -5,18 +5,21 @@ Tests for services/keeper_bot.py
 import asyncio
 import os
 import sys
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from stellar_sdk import Keypair as StellarKeypair
+
 import services.keeper_bot as kb
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+TEST_KEYPAIR = StellarKeypair.random()
+TEST_PUBLIC_KEY = TEST_KEYPAIR.public_key
+TEST_SECRET_KEY = TEST_KEYPAIR.secret
+
 
 def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
@@ -25,6 +28,7 @@ def _run(coro):
 # ---------------------------------------------------------------------------
 # compute_target_allocation
 # ---------------------------------------------------------------------------
+
 
 class TestComputeTargetAllocation:
     def test_high_volatility_returns_100_stable(self):
@@ -41,108 +45,139 @@ class TestComputeTargetAllocation:
 
 
 # ---------------------------------------------------------------------------
-# build_rebalance_transaction
+# execute_rebalance_transaction
 # ---------------------------------------------------------------------------
 
-class TestBuildRebalanceTransaction:
-    def test_structure(self):
-        tx = kb.build_rebalance_transaction(
+
+class TestExecuteRebalanceTransaction:
+    def test_raises_without_secret(self, monkeypatch):
+        monkeypatch.setattr(kb, "SIGNING_BACKEND", "env_key")
+        with pytest.raises(OSError, match="ADMIN_SECRET_KEY"):
+            kb.execute_rebalance_transaction(
+                target_stable_pct=100.0,
+                volatility_score=85.5,
+                contract_id="CONTRACT_XYZ",
+                source_secret="",
+            )
+
+    def test_raises_with_invalid_secret(self, monkeypatch):
+        monkeypatch.setattr(kb, "SIGNING_BACKEND", "env_key")
+        with pytest.raises(ValueError):
+            kb.execute_rebalance_transaction(
+                target_stable_pct=100.0,
+                volatility_score=85.5,
+                contract_id="CONTRACT_XYZ",
+                source_secret="not-a-valid-secret",
+            )
+
+    def test_builds_and_submits_transaction(self, monkeypatch):
+        # Mock the server + keypair pipeline
+        fake_keypair = Mock()
+        fake_keypair.public_key = TEST_PUBLIC_KEY
+        fake_source = Mock()
+
+        fake_tx = Mock()
+        fake_sim = Mock()
+        fake_sim.error = None
+        fake_sim.transactionData = "footprint-data"
+        fake_sim.minResourceFee = 1000
+
+        fake_send = {"hash": "abc123", "status": "PENDING"}
+
+        fake_server = Mock()
+        fake_server.load_account.return_value = fake_source
+        fake_server.simulate_transaction.return_value = fake_sim
+        fake_server.send_transaction.return_value = fake_send
+
+        monkeypatch.setattr(kb, "SIGNING_BACKEND", "env_key")
+        monkeypatch.setattr(kb, "Server", lambda url: fake_server)
+        monkeypatch.setattr(kb, "Keypair", Mock(from_secret=lambda s: fake_keypair))
+        monkeypatch.setattr(kb, "TransactionBuilder", Mock())
+
+        # Make TransactionBuilder chain work
+        kb.TransactionBuilder.return_value.append_invoke_contract_function_op.return_value.set_timeout.return_value.build.return_value = fake_tx
+
+        result = kb.execute_rebalance_transaction(
             target_stable_pct=100.0,
             volatility_score=85.5,
             contract_id="CONTRACT_XYZ",
-            source_account="GABC",
+            source_secret=TEST_SECRET_KEY,
         )
-        assert tx["function"] == "rebalance"
-        assert tx["contract_id"] == "CONTRACT_XYZ"
-        assert tx["args"]["target_stable_pct"] == 100
-        assert tx["args"]["volatility_score"] == 85.5
-        assert "timestamp" in tx["args"]
 
-    def test_zero_allocation(self):
-        tx = kb.build_rebalance_transaction(
-            target_stable_pct=0.0,
-            volatility_score=30.0,
-            contract_id="C",
-            source_account="S",
-        )
-        assert tx["args"]["target_stable_pct"] == 0
+        fake_server.load_account.assert_called_once_with(TEST_PUBLIC_KEY)
+        fake_server.simulate_transaction.assert_called_once_with(fake_tx)
+        fake_server.send_transaction.assert_called_once_with(fake_tx)
+        fake_tx.soroban_data = "footprint-data"
+        assert fake_tx.soroban_data == "footprint-data"
+        assert result == fake_send
 
+    def test_raises_when_simulation_fails(self, monkeypatch):
+        fake_keypair = Mock()
+        fake_keypair.public_key = TEST_PUBLIC_KEY
+        fake_tx = Mock()
+        fake_sim = Mock()
+        fake_sim.error = "Simulation failed: bad footprint"
+        fake_sim.transactionData = None
 
-# ---------------------------------------------------------------------------
-# _encode_transaction_xdr
-# ---------------------------------------------------------------------------
+        fake_server = Mock()
+        fake_server.load_account.return_value = Mock()
+        fake_server.simulate_transaction.return_value = fake_sim
 
-class TestEncodeTransactionXdr:
-    def test_returns_bytes(self):
-        tx = {"a": 1, "b": 2}
-        result = kb._encode_transaction_xdr(tx)
-        assert isinstance(result, bytes)
-
-    def test_deterministic(self):
-        tx = {"z": 9, "a": 1}
-        assert kb._encode_transaction_xdr(tx) == kb._encode_transaction_xdr(tx)
-
-    def test_different_payloads_differ(self):
-        assert kb._encode_transaction_xdr({"x": 1}) != kb._encode_transaction_xdr({"x": 2})
-
-
-# ---------------------------------------------------------------------------
-# sign_with_env_key
-# ---------------------------------------------------------------------------
-
-class TestSignWithEnvKey:
-    def test_signs_successfully(self, monkeypatch):
-        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY_HEX", "a" * 64)
-        sig = _run(kb.sign_with_env_key(b"payload"))
-        assert isinstance(sig, str)
-        assert len(sig) > 0
-
-    def test_raises_without_key(self, monkeypatch):
-        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY_HEX", "")
-        with pytest.raises(EnvironmentError):
-            _run(kb.sign_with_env_key(b"payload"))
-
-    def test_different_payloads_produce_different_sigs(self, monkeypatch):
-        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY_HEX", "b" * 64)
-        sig1 = _run(kb.sign_with_env_key(b"payload_one"))
-        sig2 = _run(kb.sign_with_env_key(b"payload_two"))
-        assert sig1 != sig2
-
-
-# ---------------------------------------------------------------------------
-# sign_transaction dispatch
-# ---------------------------------------------------------------------------
-
-class TestSignTransaction:
-    def test_dispatches_to_env_key(self, monkeypatch):
         monkeypatch.setattr(kb, "SIGNING_BACKEND", "env_key")
-        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY_HEX", "c" * 64)
-        sig = _run(kb.sign_transaction(b"data"))
-        assert isinstance(sig, str)
+        monkeypatch.setattr(kb, "Server", lambda url: fake_server)
+        monkeypatch.setattr(kb, "Keypair", Mock(from_secret=lambda s: fake_keypair))
+        monkeypatch.setattr(kb, "TransactionBuilder", Mock())
+        kb.TransactionBuilder.return_value.append_invoke_contract_function_op.return_value.set_timeout.return_value.build.return_value = fake_tx
 
-    def test_dispatches_to_aws_kms(self, monkeypatch):
-        monkeypatch.setattr(kb, "SIGNING_BACKEND", "aws_kms")
-        monkeypatch.setattr(kb, "AWS_KMS_KEY_ID", "fake-key-id")
-        mock_sign = AsyncMock(return_value="kms-sig")
-        monkeypatch.setattr(kb, "sign_with_aws_kms", mock_sign)
-        sig = _run(kb.sign_transaction(b"data"))
-        assert sig == "kms-sig"
-        mock_sign.assert_awaited_once_with(b"data")
+        with pytest.raises(RuntimeError, match="Simulation failed"):
+            kb.execute_rebalance_transaction(
+                target_stable_pct=100.0,
+                volatility_score=85.5,
+                contract_id="CONTRACT_XYZ",
+                source_secret=TEST_SECRET_KEY,
+            )
 
-    def test_dispatches_to_vault(self, monkeypatch):
-        monkeypatch.setattr(kb, "SIGNING_BACKEND", "vault")
-        mock_sign = AsyncMock(return_value="vault-sig")
-        monkeypatch.setattr(kb, "sign_with_vault", mock_sign)
-        sig = _run(kb.sign_transaction(b"data"))
-        assert sig == "vault-sig"
-        mock_sign.assert_awaited_once_with(b"data")
+    def test_raises_when_submission_has_error_result(self, monkeypatch):
+        fake_keypair = Mock()
+        fake_keypair.public_key = TEST_PUBLIC_KEY
+        fake_tx = Mock()
+        fake_sim = Mock()
+        fake_sim.error = None
+        fake_sim.transactionData = "footprint-data"
+        fake_sim.minResourceFee = 1000
+
+        fake_server = Mock()
+        fake_server.load_account.return_value = Mock()
+        fake_server.simulate_transaction.return_value = fake_sim
+        fake_server.send_transaction.return_value = {"errorResultXdr": "XDR error"}
+
+        monkeypatch.setattr(kb, "SIGNING_BACKEND", "env_key")
+        monkeypatch.setattr(kb, "Server", lambda url: fake_server)
+        monkeypatch.setattr(kb, "Keypair", Mock(from_secret=lambda s: fake_keypair))
+        monkeypatch.setattr(kb, "TransactionBuilder", Mock())
+        kb.TransactionBuilder.return_value.append_invoke_contract_function_op.return_value.set_timeout.return_value.build.return_value = fake_tx
+
+        with pytest.raises(RuntimeError, match="Transaction submission failed"):
+            kb.execute_rebalance_transaction(
+                target_stable_pct=100.0,
+                volatility_score=85.5,
+                contract_id="CONTRACT_XYZ",
+                source_secret=TEST_SECRET_KEY,
+            )
 
 
 # ---------------------------------------------------------------------------
 # KeeperBot.run_once
 # ---------------------------------------------------------------------------
 
+
 class TestKeeperBotRunOnce:
+    @pytest.fixture(autouse=True)
+    def setup_mocks(self, monkeypatch):
+        monkeypatch.setattr(kb, "get_keeper_status", lambda: None)
+        monkeypatch.setattr(kb, "record_keeper_heartbeat", Mock())
+        monkeypatch.setattr(kb, "record_keeper_failure", Mock())
+
     def _bot(self):
         return kb.KeeperBot()
 
@@ -152,15 +187,15 @@ class TestKeeperBotRunOnce:
 
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
-        monkeypatch.setattr(kb, "SOROBAN_SOURCE_ACCOUNT", "S")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
 
         # Score still high → target stays 100 % stable → delta == 0
         monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=90.0))
-        mock_submit = AsyncMock()
-        monkeypatch.setattr(kb, "submit_to_soroban", mock_submit)
+        mock_execute = Mock()
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
         _run(bot.run_once())
-        mock_submit.assert_not_awaited()
+        mock_execute.assert_not_called()
 
     def test_triggers_rebalance_when_delta_above_threshold(self, monkeypatch):
         bot = self._bot()
@@ -168,69 +203,149 @@ class TestKeeperBotRunOnce:
 
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
-        monkeypatch.setattr(kb, "SOROBAN_SOURCE_ACCOUNT", "S")
-        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY_HEX", "d" * 64)
-        monkeypatch.setattr(kb, "SIGNING_BACKEND", "env_key")
-
-        # Score flips above cutoff → target becomes 100 % stable → delta == 100
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
         monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
-        mock_submit = AsyncMock(return_value={"result": {"status": "PENDING"}})
-        monkeypatch.setattr(kb, "submit_to_soroban", mock_submit)
+        mock_execute = Mock(return_value={"hash": "x"})
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
         _run(bot.run_once())
-        mock_submit.assert_awaited_once()
+        mock_execute.assert_called_once()
         assert bot._last_allocation == 100.0
 
     def test_skips_submission_when_contract_id_missing(self, monkeypatch):
         bot = self._bot()
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "")
-        monkeypatch.setattr(kb, "SOROBAN_SOURCE_ACCOUNT", "S")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
         monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
-        mock_submit = AsyncMock()
-        monkeypatch.setattr(kb, "submit_to_soroban", mock_submit)
+        mock_execute = Mock()
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
         _run(bot.run_once())
-        mock_submit.assert_not_awaited()
+        mock_execute.assert_not_called()
+
+    def test_skips_submission_when_secret_missing(self, monkeypatch):
+        bot = self._bot()
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", "")
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        mock_execute = Mock()
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
+
+        _run(bot.run_once())
+        mock_execute.assert_not_called()
 
     def test_handles_api_fetch_failure_gracefully(self, monkeypatch):
         bot = self._bot()
         monkeypatch.setattr(
-            kb, "fetch_volatility_score",
+            kb,
+            "fetch_volatility_score",
             AsyncMock(side_effect=httpx.RequestError("timeout")),
         )
-        mock_submit = AsyncMock()
-        monkeypatch.setattr(kb, "submit_to_soroban", mock_submit)
+        mock_execute = Mock()
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
         # Should not raise
         _run(bot.run_once())
-        mock_submit.assert_not_awaited()
+        mock_execute.assert_not_called()
 
-    def test_handles_signing_failure_gracefully(self, monkeypatch):
+    def test_handles_execution_failure_gracefully(self, monkeypatch):
         bot = self._bot()
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
-        monkeypatch.setattr(kb, "SOROBAN_SOURCE_ACCOUNT", "S")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
         monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
-        monkeypatch.setattr(
-            kb, "sign_transaction", AsyncMock(side_effect=RuntimeError("KMS error"))
-        )
-        mock_submit = AsyncMock()
-        monkeypatch.setattr(kb, "submit_to_soroban", mock_submit)
+        mock_execute = Mock(side_effect=RuntimeError("RPC down"))
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
+        # Should not raise
         _run(bot.run_once())
-        mock_submit.assert_not_awaited()
 
     def test_does_not_update_allocation_on_submission_failure(self, monkeypatch):
         bot = self._bot()
         bot._last_allocation = 0.0
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
-        monkeypatch.setattr(kb, "SOROBAN_SOURCE_ACCOUNT", "S")
-        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY_HEX", "e" * 64)
-        monkeypatch.setattr(kb, "SIGNING_BACKEND", "env_key")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
         monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
-        monkeypatch.setattr(
-            kb, "submit_to_soroban", AsyncMock(side_effect=RuntimeError("RPC down"))
-        )
+        mock_execute = Mock(side_effect=RuntimeError("RPC down"))
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
         _run(bot.run_once())
         assert bot._last_allocation == 0.0  # unchanged after failed submission
+
+    def test_halts_when_circuit_breaker_tripped(self, monkeypatch):
+        bot = self._bot()
+        monkeypatch.setattr(
+            kb,
+            "get_keeper_status",
+            lambda: {
+                "consecutive_failures": 3,
+                "last_heartbeat": kb.datetime.now(kb.timezone.utc),
+            },
+        )
+        mock_fetch = AsyncMock()
+        monkeypatch.setattr(kb, "fetch_volatility_score", mock_fetch)
+        _run(bot.run_once())
+        mock_fetch.assert_not_called()
+
+    def test_halts_when_dead_man_active(self, monkeypatch):
+        bot = self._bot()
+        from datetime import timedelta
+
+        past = kb.datetime.now(kb.timezone.utc) - timedelta(hours=7)
+        monkeypatch.setattr(
+            kb,
+            "get_keeper_status",
+            lambda: {"consecutive_failures": 0, "last_heartbeat": past},
+        )
+        mock_fetch = AsyncMock()
+        monkeypatch.setattr(kb, "fetch_volatility_score", mock_fetch)
+        _run(bot.run_once())
+        mock_fetch.assert_not_called()
+
+    def test_records_heartbeat_on_success(self, monkeypatch):
+        bot = self._bot()
+        bot._last_allocation = 0.0
+        monkeypatch.setattr(
+            kb,
+            "get_keeper_status",
+            lambda: {
+                "consecutive_failures": 0,
+                "last_heartbeat": kb.datetime.now(kb.timezone.utc),
+            },
+        )
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "execute_rebalance_transaction", Mock(return_value={"hash": "x"})
+        )
+        mock_heartbeat = Mock()
+        monkeypatch.setattr(kb, "record_keeper_heartbeat", mock_heartbeat)
+
+        _run(bot.run_once())
+        mock_heartbeat.assert_called_once()
+
+    def test_records_failure_on_exception(self, monkeypatch):
+        bot = self._bot()
+        bot._last_allocation = 0.0
+        monkeypatch.setattr(
+            kb,
+            "get_keeper_status",
+            lambda: {
+                "consecutive_failures": 0,
+                "last_heartbeat": kb.datetime.now(kb.timezone.utc),
+            },
+        )
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "execute_rebalance_transaction", Mock(side_effect=RuntimeError("fail"))
+        )
+        mock_failure = Mock()
+        monkeypatch.setattr(kb, "record_keeper_failure", mock_failure)
+
+        _run(bot.run_once())
+        mock_failure.assert_called_once()

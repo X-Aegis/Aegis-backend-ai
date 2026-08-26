@@ -123,7 +123,11 @@ def test_get_backtest_results_returns_stored_reports(monkeypatch):
             "num_regime_switches": 0,
             "time_in_stable_pct": 0.0,
         },
-        "comparison": {"return_improvement_pct": 3.0, "drawdown_reduction_pct": 2.0, "sharpe_improvement": 0.7},
+        "comparison": {
+            "return_improvement_pct": 3.0,
+            "drawdown_reduction_pct": 2.0,
+            "sharpe_improvement": 0.7,
+        },
     }
 
     captured = {}

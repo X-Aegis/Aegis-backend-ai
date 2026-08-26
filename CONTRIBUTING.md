@@ -26,19 +26,17 @@ We follow a strict **Modular Commit** philosophy to ensure history is readable a
 
 ## 📋 Issue Tracking
 
-1.  Pick an issue from the `docs/` folder.
-2.  When you start, comment on the issue or mark it as "In Progress".
-3.  **When Completed:** You MUST update the issue file with:
-    *   Check the box `[x]`
-    *   Append your GitHub username and Date/Time.
-    *   *Example:* `- [x] Integrate FX Feed (@bbkenny - 2023-10-27 14:00)`
+1.  Pick an open issue from the **Issues** tab on GitHub.
+2.  **Apply via the GrantFox platform** (if the issue is listed in an active Campaign) and wait to be assigned.
+3.  When you start, comment on the issue or mark it as "In Progress".
+4.  **When Completed:** your PR must reference the issue with `Closes #<number>` so it auto-closes on merge.
 
 ## 🧪 Development Workflow
 
 1.  **Clone**: Clone the repo locally.
 2.  **Branch**: Create a feature branch (`feat/my-feature`).
 3.  **Develop**: Write code following the Style Guide (`STYLE.md`).
-4.  **Test**: Run `cargo test` (contracts).
+4.  **Test**: Run `ruff check .` and `pytest` locally before pushing.
 5.  **Commit**: Follow the commit guidelines above.
 
 ## 🔗 Pull Request Checklist
@@ -66,6 +64,16 @@ When opening a PR, follow these steps:
     > @bbkenny, PR is ready for review!
 
 3.  **Keep PRs Small**: Only fix what's needed. Don't rewrite entire files or change hundreds of lines when the issue only needs a few lines fixed. Real devs fix the specific problem, not everything.
+
+## ✅ Contribution Guidelines (Project-Wide)
+
+These rules are required for every contribution and are enforced during review.
+
+1.  **Human review required** — all PRs are reviewed by the maintainer before merge. Automated checks only advise; they never approve or merge.
+2.  **No agent/AI branches** — use a normal `feature/*` branch and never an `agent/*` branch; do not submit purely AI-generated work without your own analysis, testing, and ownership of the change.
+3.  **Show the work** — include evidence in your PR: tests run/passing, and where applicable a screenshot or short demo of the feature in action.
+4.  **Link the issue** — every PR description must use `Closes #<issue>`.
+5.  **Quality over quantity** — pick issues that move the product forward. Difficulty alone is not value; the change must be user-visible or fix a real problem.
 
 ## Getting Help
 

@@ -26,13 +26,10 @@ jobs:
           pip install pytest ruff
 
       - name: Lint with Ruff
-        continue-on-error: true
         run: |
           ruff check .
 
       - name: Run Tests
-        id: backend_test
-        continue-on-error: true
         run: |
           # Only run pytest if there are actual tests to run
           if [ -d "tests" ] || find . -maxdepth 2 -name "test*.py" | grep -q .; then

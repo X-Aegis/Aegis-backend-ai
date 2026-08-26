@@ -1,13 +1,13 @@
-# X-Aegis Backend & AI 🤖⚙️
+# XHedge (Aegis) Backend & AI 🤖⚙️
 
 <p align="center">
-  <img src="logo.jpeg" alt="X-Aegis Logo" width="200" />
+  <img src="logo.jpeg" alt="XHedge (Aegis) Logo" width="200" />
 </p>
 
 ```text
 ╔════════════════════════════════════════════════════════════════════╗
 ║                                                                    ║
-║           X - A E G I S   B A C K E N D   &   A I                  ║
+║         X H E D G E ( A E G I S )   B A C K E N D   A I            ║
 ║                                                                    ║
 ║               AI Forecasting & Automation Engine                   ║
 ║           Powering Volatility Protection on Stellar                ║
@@ -15,13 +15,18 @@
 ╚════════════════════════════════════════════════════════════════════╝
 ```
 
-> **The Intelligence Layer of the Aegis Volatility Shield.**
+> **The Intelligence Layer of the XHedge (Aegis) Volatility Shield.**
+
+## 🚀 Deployment Status
+- **Backend API:** Deployed on Render
+- **URL:** [https://aegis-backend-ai.onrender.com](https://aegis-backend-ai.onrender.com)
+- **Status:** Live & processing AI risk algorithms
 
 ---
 
 ## 📈 Overview
 
-This repository houses the off-chain intelligence and automation modules for the X-Aegis protocol. It is responsible for:
+This repository houses the off-chain intelligence and automation modules for the XHedge (Aegis) protocol. It is responsible for:
 *   **FX Forecasting**: Time-series modeling to predict volatility spikes in emerging market currencies.
 *   **Risk Oracles**: Serving real-time risk scores to the frontend and smart contracts.
 *   **Keeper Automation**: Monitoring protocol conditions and triggering rebalancing transactions on Soroban.
@@ -68,6 +73,7 @@ pip install -r requirements.txt
 ## 📚 Documentation
 *   📘 **[Backend Roadmap](./docs/BACKEND_ROADMAP.md)**
 *   🤖 **[AI Model Guide](./docs/AI_MODEL_GUIDE.md)**
+*   🚨 **[Alerting rules & runbooks](./alerting/README.md)**
 
 ---
 

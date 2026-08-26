@@ -1,0 +1,35 @@
+# Scrape + evaluation config. Pair with alerting/alertmanager/alertmanager.yml.
+# Targets assume the FastAPI app exposes /metrics (BK-15a / issue #36).
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    system: x-aegis
+    service: backend-ai
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+rule_files:
+  - /etc/prometheus/rules/aegis-alerts.yml
+
+scrape_configs:
+  - job_name: aegis-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - api:8000
+        labels:
+          component: api
+
+  - job_name: aegis-keeper
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - keeper:8001
+        labels:
+          component: keeper

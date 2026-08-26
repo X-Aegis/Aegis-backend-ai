@@ -392,3 +392,82 @@ def get_drift_summary(pair: str, horizon: int, limit: int = 100):
             return cur.fetchall()
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Keeper Bot Status
+# ---------------------------------------------------------------------------
+
+
+def get_keeper_status():
+    """
+    Returns the keeper bot status as a dict.
+    Keys: consecutive_failures, last_heartbeat
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT consecutive_failures, last_heartbeat
+                FROM keeper_status
+                WHERE id = 1
+                """
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def record_keeper_heartbeat():
+    """
+    Resets consecutive_failures to 0 and updates last_heartbeat to now.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE keeper_status
+                SET consecutive_failures = 0, last_heartbeat = now()
+                WHERE id = 1
+                """
+            )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Error recording keeper heartbeat: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def record_keeper_failure():
+    """
+    Increments consecutive_failures by 1.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE keeper_status
+                SET consecutive_failures = consecutive_failures + 1
+                WHERE id = 1
+                """
+            )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Error recording keeper failure: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def reset_keeper_circuit():
+    """
+    Admin function: Resets failures to 0 and updates last_heartbeat to now.
+    """
+    # Uses the same logic as heartbeat
+    record_keeper_heartbeat()
