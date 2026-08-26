@@ -222,7 +222,6 @@ def list_backtest_results(pair=None, strategy_name=None, limit=20, offset=0):
 # Drift monitoring helpers
 # ---------------------------------------------------------------------------
 
-
 def save_prediction(
     timestamp, horizon: int, volatility_score: float, pair: str = "USD/NGN"
 ):

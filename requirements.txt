@@ -1,3 +1,4 @@
+# Aegis Backend AI Dependencies
 psycopg2-binary
 fastapi
 uvicorn[standard]
@@ -7,6 +8,7 @@ scikit-learn
 python-dotenv
 httpx
 pydantic
+soroban-sdk>=0.0.1.dev0
 stellar-sdk
 feedparser
 vaderSentiment

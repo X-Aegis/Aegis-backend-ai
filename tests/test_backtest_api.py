@@ -148,3 +148,37 @@ def test_get_backtest_results_returns_stored_reports(monkeypatch):
     assert data[0]["pair"] == "USD/NGN"
     assert captured["pair"] == "USD/NGN"
     assert captured["limit"] == 5
+
+
+def test_create_backtest_with_gru_model(monkeypatch):
+    rows = _series([1500.0 + (i % 4) for i in range(30)])
+    monkeypatch.setattr(
+        "api.backtest.get_fx_rate_series", lambda pair, start, end: rows
+    )
+
+    saved = {}
+
+    def fake_save(**kwargs):
+        saved.update(kwargs)
+        return {"id": 2, "created_at": datetime(2026, 1, 6, tzinfo=timezone.utc)}
+
+    monkeypatch.setattr("api.backtest.save_backtest_result", fake_save)
+
+    response = client.post("/backtest", json=_request_body(model_type="gru"))
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["id"] == 2
+    assert data["params"]["model_type"] == "gru"
+    assert saved["params"]["model_type"] == "gru"
+
+
+def test_create_backtest_with_invalid_model_type(monkeypatch):
+    rows = _series([1500.0 + (i % 4) for i in range(30)])
+    monkeypatch.setattr(
+        "api.backtest.get_fx_rate_series", lambda pair, start, end: rows
+    )
+
+    response = client.post("/backtest", json=_request_body(model_type="invalid"))
+
+    assert response.status_code == 422
