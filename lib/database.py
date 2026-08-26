@@ -81,6 +81,123 @@ def get_fx_rate_series(pair, start_date, end_date):
         conn.close()
 
 
+def _fx_source_filter_sql(sources, exclude_sources, values):
+    """
+    Appends optional source allow/deny filters to an fx_rates query.
+    Returns the SQL fragment; ``values`` is extended in place with its params.
+    """
+    clauses = []
+    if sources:
+        clauses.append("AND source = ANY(%s)")
+        values.append(list(sources))
+    if exclude_sources:
+        clauses.append("AND NOT (source = ANY(%s))")
+        values.append(list(exclude_sources))
+    return " ".join(clauses)
+
+
+def get_latest_fx_rate(pair, sources=None, exclude_sources=None):
+    """
+    Returns the most recent stored rate for ``pair`` as a dict, or None when the
+    pair has never been ingested.
+
+    ``sources`` restricts the lookup to specific feeds (e.g. only the official
+    vendors) and ``exclude_sources`` skips them (used to isolate parallel-market
+    feeds). Columns returned: timestamp, pair, rate, source.
+    """
+    values = [pair]
+    filters = _fx_source_filter_sql(sources, exclude_sources, values)
+
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT "timestamp", pair, rate, source
+                FROM fx_rates
+                WHERE pair = %s {filters}
+                ORDER BY "timestamp" DESC
+                LIMIT 1
+                """,
+                values,
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def get_fx_rate_window(pair, since, sources=None, exclude_sources=None, limit=1000):
+    """
+    Returns up to ``limit`` of the most recent rates for ``pair`` at or after
+    ``since``, ordered oldest-first so callers can compute returns directly.
+
+    Columns returned: timestamp, pair, rate, source.
+    """
+    values = [pair, since]
+    filters = _fx_source_filter_sql(sources, exclude_sources, values)
+    values.append(limit)
+
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT * FROM (
+                    SELECT "timestamp", pair, rate, source
+                    FROM fx_rates
+                    WHERE pair = %s AND "timestamp" >= %s {filters}
+                    ORDER BY "timestamp" DESC
+                    LIMIT %s
+                ) recent
+                ORDER BY "timestamp" ASC
+                """,
+                values,
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def get_fx_source_status(pair=None):
+    """
+    Returns per-(source, pair) ingestion health: the newest stored timestamp,
+    the latest rate and how many points landed in the last 24 hours.
+
+    Used by ``GET /fx/sources`` to show which feeds are actually alive.
+    """
+    values = []
+    where = ""
+    if pair:
+        where = "WHERE pair = %s"
+        values.append(pair)
+
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT DISTINCT ON (source, pair)
+                       source,
+                       pair,
+                       "timestamp" AS last_timestamp,
+                       rate        AS last_rate,
+                       (
+                           SELECT COUNT(*) FROM fx_rates inner_rates
+                           WHERE inner_rates.source = fx_rates.source
+                             AND inner_rates.pair = fx_rates.pair
+                             AND inner_rates."timestamp" >= now() - INTERVAL '24 hours'
+                       ) AS points_last_24h
+                FROM fx_rates
+                {where}
+                ORDER BY source, pair, "timestamp" DESC
+                """,
+                values,
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
 def save_backtest_result(
     strategy_name,
     pair,
@@ -221,6 +338,7 @@ def list_backtest_results(pair=None, strategy_name=None, limit=20, offset=0):
 # ---------------------------------------------------------------------------
 # Drift monitoring helpers
 # ---------------------------------------------------------------------------
+
 
 def save_prediction(
     timestamp, horizon: int, volatility_score: float, pair: str = "USD/NGN"

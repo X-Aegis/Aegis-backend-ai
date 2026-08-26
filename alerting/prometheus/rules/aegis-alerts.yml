@@ -3,7 +3,7 @@
 # Metric contract (exported by the BK-15a Prometheus client, issue #36):
 #   aegis_model_drift_detected{pair,horizon}          gauge  1 when ADWIN or Page-Hinkley fired
 #   aegis_keeper_circuit_breaker_open                 gauge  1 when the keeper refuses new rebalances
-#   aegis_datasource_up{source}                       gauge  1 healthy / 0 down (fixer, openexchangerates, stellar_rpc, database)
+#   aegis_datasource_up{source}                       gauge  1 healthy / 0 down (fixer, openexchangerates, exchangerate_api, parallel_market, stellar_rpc, database)
 #   aegis_rebalance_failures_total                    counter  failed Soroban rebalance submissions
 #   aegis_vault_tvl                                   gauge  latest vault Total Value Locked (same unit as vault_snapshots.tvl)
 #

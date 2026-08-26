@@ -4,17 +4,28 @@
 -- Setup timescaledb extension if not exists
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
--- Table to store historical FX rates
+-- Table to store historical FX rates.
+-- source is part of the primary key: the official vendors and the
+-- parallel-market feed quote the same pair at the same minute with different
+-- rates, and both prints must be kept (see db/migrations/001_fx_rates_multi_source.sql).
 CREATE TABLE IF NOT EXISTS fx_rates (
     "timestamp" TIMESTAMPTZ NOT NULL,
-    pair VARCHAR(10) NOT NULL,
-    rate NUMERIC NOT NULL,
-    source VARCHAR(50) NOT NULL,
-    PRIMARY KEY ("timestamp", pair)
+    pair VARCHAR(10) NOT NULL,   -- canonical orientation, e.g. 'USD/NGN'
+    rate NUMERIC NOT NULL,       -- units of the quote currency per 1 USD
+    source VARCHAR(50) NOT NULL, -- e.g. Fixer.io, OpenExchangeRates, ParallelMarket
+    PRIMARY KEY ("timestamp", pair, source)
 );
 
 -- Convert fx_rates to a hypertable for timeseries optimization
 SELECT create_hypertable('fx_rates', 'timestamp', if_not_exists => TRUE);
+
+-- Latest-rate and rolling-window lookups (GET /fx/current, GET /risk/current)
+CREATE INDEX IF NOT EXISTS idx_fx_rates_pair_timestamp
+ON fx_rates (pair, "timestamp" DESC);
+
+-- Per-source freshness lookups (GET /fx/sources, source fallback checks)
+CREATE INDEX IF NOT EXISTS idx_fx_rates_pair_source_timestamp
+ON fx_rates (pair, source, "timestamp" DESC);
 
 -- Table to store model predictions and their observed actual outcomes.
 -- actual_outcome is nullable — populated later via the outcome recording endpoint.
