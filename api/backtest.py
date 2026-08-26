@@ -48,6 +48,8 @@ class BacktestMetrics(BaseModel):
     final_value: float
     total_return_pct: float
     max_drawdown_pct: float
+    sharpe_ratio: float
+    win_rate_pct: float
     num_regime_switches: int
     time_in_stable_pct: float
 
@@ -55,6 +57,7 @@ class BacktestMetrics(BaseModel):
 class BacktestComparison(BaseModel):
     return_improvement_pct: float
     drawdown_reduction_pct: float
+    sharpe_improvement: float
 
 
 class BacktestResult(BaseModel):
