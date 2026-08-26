@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 
 import httpx
 from dotenv import load_dotenv
@@ -22,10 +23,12 @@ from stellar_sdk import Keypair, Server, TransactionBuilder, scval
 # ---------------------------------------------------------------------------
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from datetime import datetime, timezone
-
 from lib.database import (
+    get_keeper_stats,
     get_keeper_status,
+    get_last_submitted_allocation,
+    get_manual_override,
+    record_keeper_decision,
     record_keeper_failure,
     record_keeper_heartbeat,
 )
@@ -48,6 +51,9 @@ HIGH_VOLATILITY_CUTOFF: float = float(os.getenv("HIGH_VOLATILITY_CUTOFF", "80.0"
 """Volatility score above which the vault should be 100 % in stable assets."""
 
 POLL_INTERVAL_SECONDS: int = int(os.getenv("POLL_INTERVAL_SECONDS", "3600"))  # 1 hour
+
+MAX_REBALANCES_PER_24H = 4
+MAX_ALLOCATION_CHANGE_PCT = 20.0
 
 # Soroban RPC
 SOROBAN_RPC_URL: str = os.getenv(
@@ -212,8 +218,40 @@ async def fetch_volatility_score() -> float:
 class KeeperBot:
     """Stateful keeper that remembers the last submitted allocation."""
 
-    def __init__(self) -> None:
+    def __init__(self, now_fn=None) -> None:
         self._last_allocation: float | None = None
+        self._now = now_fn or (lambda: datetime.now(timezone.utc))
+
+    def _policy_checks(
+        self, target: float, current_allocation: float | None, manual_override: bool
+    ) -> dict:
+        stats = get_keeper_stats()
+        rebalance_count = int(stats["count_last_24h"])
+        allocation_change = (
+            abs(target - current_allocation) if current_allocation is not None else 0.0
+        )
+        return {
+            "manual_override": manual_override,
+            "rate_limit": {
+                "passed": manual_override or rebalance_count < MAX_REBALANCES_PER_24H,
+                "count_last_24h": rebalance_count,
+                "max_rebalances_per_24h": MAX_REBALANCES_PER_24H,
+            },
+            "allocation_change": {
+                "passed": manual_override
+                or allocation_change <= MAX_ALLOCATION_CHANGE_PCT,
+                "change_percentage_points": allocation_change,
+                "max_percentage_points": MAX_ALLOCATION_CHANGE_PCT,
+            },
+        }
+
+    @staticmethod
+    def _is_policy_approved(checks: dict) -> bool:
+        return checks["rate_limit"]["passed"] and checks["allocation_change"]["passed"]
+
+    @staticmethod
+    def _proposed_allocations(target: float) -> dict:
+        return {"stable": target, "risky": 100.0 - target}
 
     async def run_once(self) -> None:
         """Single poll-and-rebalance cycle."""
@@ -223,7 +261,7 @@ class KeeperBot:
             failures = status.get("consecutive_failures", 0)
             last_heartbeat = status.get("last_heartbeat")
             if last_heartbeat:
-                now = datetime.now(timezone.utc)
+                now = self._now()
                 diff_hours = (now - last_heartbeat).total_seconds() / 3600
                 if diff_hours >= 6:
                     log.error(
@@ -248,10 +286,27 @@ class KeeperBot:
         target = compute_target_allocation(score)
         log.info("Target allocation: %.1f %% stable", target)
 
+        proposed_allocations = self._proposed_allocations(target)
+        current_allocation = self._last_allocation
+        if current_allocation is None:
+            current_allocation = get_last_submitted_allocation()
+        manual_override = get_manual_override()
+        checks = self._policy_checks(target, current_allocation, manual_override)
+        if not self._is_policy_approved(checks):
+            record_keeper_decision(score, proposed_allocations, checks, "rejected")
+            log.warning("Rebalance rejected by keeper policy: %s", checks)
+            return
+
         # 3. Skip if change is below threshold
-        if self._last_allocation is not None:
-            delta = abs(target - self._last_allocation)
+        if current_allocation is not None:
+            delta = abs(target - current_allocation)
             if delta < REBALANCE_THRESHOLD:
+                checks["rebalance_threshold"] = {
+                    "passed": False,
+                    "change_percentage_points": delta,
+                    "min_percentage_points": REBALANCE_THRESHOLD,
+                }
+                record_keeper_decision(score, proposed_allocations, checks, "rejected")
                 log.info(
                     "Allocation delta %.2f %% < threshold %.2f %% — no rebalance needed.",
                     delta,
@@ -266,8 +321,19 @@ class KeeperBot:
         else:
             log.info("First run — submitting initial allocation.")
 
+        checks["rebalance_threshold"] = {
+            "passed": True,
+            "change_percentage_points": (
+                abs(target - current_allocation)
+                if current_allocation is not None
+                else None
+            ),
+            "min_percentage_points": REBALANCE_THRESHOLD,
+        }
+
         # 4. Guard: require contract config
         if not SOROBAN_CONTRACT_ID or not ADMIN_SECRET_KEY:
+            record_keeper_decision(score, proposed_allocations, checks, "rejected")
             log.error(
                 "SOROBAN_CONTRACT_ID or ADMIN_SECRET_KEY is not configured. "
                 "Skipping submission."
@@ -285,6 +351,14 @@ class KeeperBot:
                 source_secret=ADMIN_SECRET_KEY,
             )
             self._last_allocation = target
+            checks["submission"] = {"passed": True}
+            record_keeper_decision(
+                score,
+                proposed_allocations,
+                checks,
+                "approved",
+                transaction_submitted=True,
+            )
             log.info(
                 "Rebalance submitted successfully. New allocation: %.1f %% stable.",
                 target,
@@ -292,6 +366,8 @@ class KeeperBot:
             record_keeper_heartbeat()
         except Exception as exc:  # noqa: BLE001 - keep the hourly loop alive on any SDK error
             log.error("Soroban transaction failed: %s", exc)
+            checks["submission"] = {"passed": False, "error": str(exc)}
+            record_keeper_decision(score, proposed_allocations, checks, "rejected")
             record_keeper_failure()
 
     async def run(self) -> None:

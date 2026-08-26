@@ -78,3 +78,35 @@ def test_restart_circuit_authorized(monkeypatch):
     )
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "message": "Circuit reset successfully"}
+
+
+def test_set_manual_override_authorized(monkeypatch):
+    monkeypatch.setenv("KEEPER_ADMIN_TOKEN", "test-token")
+    set_override = []
+    monkeypatch.setattr(
+        "api.keeper.set_manual_override", lambda enabled: set_override.append(enabled)
+    )
+
+    response = client.patch(
+        "/keeper/override",
+        headers={"x-admin-token": "test-token"},
+        json={"manual_override": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"manual_override": True}
+    assert set_override == [True]
+
+
+def test_keeper_stats(monkeypatch):
+    expected = {
+        "last_rebalance_time": None,
+        "count_last_24h": 2,
+        "last_10_decisions": [{"decision": "approved"}],
+    }
+    monkeypatch.setattr("api.keeper.get_keeper_stats", lambda: expected)
+
+    response = client.get("/keeper/stats")
+
+    assert response.status_code == 200
+    assert response.json() == expected
