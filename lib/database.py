@@ -472,3 +472,123 @@ def reset_keeper_circuit():
     """
     # Uses the same logic as heartbeat
     record_keeper_heartbeat()
+
+
+# ---------------------------------------------------------------------------
+# Keeper rebalance policy
+# ---------------------------------------------------------------------------
+
+
+def get_manual_override():
+    """Returns whether an administrator has enabled keeper policy overrides."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT manual_override FROM keeper_policy WHERE id = 1")
+            row = cur.fetchone()
+            return bool(row and row["manual_override"])
+    finally:
+        conn.close()
+
+
+def set_manual_override(enabled: bool):
+    """Updates the administrator-controlled keeper policy override flag."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE keeper_policy SET manual_override = %s WHERE id = 1",
+                (enabled,),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def record_keeper_decision(
+    model_score: float,
+    proposed_allocations: dict,
+    threshold_checks: dict,
+    decision: str,
+    transaction_submitted: bool = False,
+):
+    """Persists an auditable keeper policy decision."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO keeper_decisions
+                    (model_score, proposed_allocations, threshold_checks, decision,
+                     transaction_submitted)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    model_score,
+                    Json(proposed_allocations),
+                    Json(threshold_checks),
+                    decision,
+                    transaction_submitted,
+                ),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_keeper_stats():
+    """Returns rebalance activity and the ten most recent policy decisions."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT MAX("timestamp") FILTER (WHERE transaction_submitted)
+                           AS last_rebalance_time,
+                       COUNT(*) FILTER (
+                           WHERE transaction_submitted
+                             AND "timestamp" >= now() - INTERVAL '24 hours'
+                       ) AS count_last_24h
+                FROM keeper_decisions
+                """
+            )
+            stats = cur.fetchone()
+            cur.execute(
+                """
+                SELECT "timestamp", model_score, proposed_allocations,
+                       threshold_checks, decision, transaction_submitted
+                FROM keeper_decisions
+                ORDER BY "timestamp" DESC
+                LIMIT 10
+                """
+            )
+            stats["last_10_decisions"] = cur.fetchall()
+            return stats
+    finally:
+        conn.close()
+
+
+def get_last_submitted_allocation():
+    """Returns the stable allocation from the latest submitted rebalance."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT proposed_allocations
+                FROM keeper_decisions
+                WHERE transaction_submitted
+                ORDER BY "timestamp" DESC
+                LIMIT 1
+                """
+            )
+            row = cur.fetchone()
+            return float(row["proposed_allocations"]["stable"]) if row else None
+    finally:
+        conn.close()

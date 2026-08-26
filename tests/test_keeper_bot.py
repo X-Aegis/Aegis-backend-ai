@@ -22,7 +22,7 @@ TEST_SECRET_KEY = TEST_KEYPAIR.secret
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # ---------------------------------------------------------------------------
@@ -175,8 +175,20 @@ class TestKeeperBotRunOnce:
     @pytest.fixture(autouse=True)
     def setup_mocks(self, monkeypatch):
         monkeypatch.setattr(kb, "get_keeper_status", lambda: None)
+        monkeypatch.setattr(kb, "get_manual_override", lambda: False)
+        monkeypatch.setattr(kb, "get_last_submitted_allocation", lambda: None)
+        monkeypatch.setattr(
+            kb,
+            "get_keeper_stats",
+            lambda: {
+                "count_last_24h": 0,
+                "last_rebalance_time": None,
+                "last_10_decisions": [],
+            },
+        )
         monkeypatch.setattr(kb, "record_keeper_heartbeat", Mock())
         monkeypatch.setattr(kb, "record_keeper_failure", Mock())
+        monkeypatch.setattr(kb, "record_keeper_decision", Mock())
 
     def _bot(self):
         return kb.KeeperBot()
@@ -199,7 +211,7 @@ class TestKeeperBotRunOnce:
 
     def test_triggers_rebalance_when_delta_above_threshold(self, monkeypatch):
         bot = self._bot()
-        bot._last_allocation = 0.0  # currently in risky
+        bot._last_allocation = 90.0
 
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
@@ -261,7 +273,7 @@ class TestKeeperBotRunOnce:
 
     def test_does_not_update_allocation_on_submission_failure(self, monkeypatch):
         bot = self._bot()
-        bot._last_allocation = 0.0
+        bot._last_allocation = 90.0
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
@@ -270,7 +282,7 @@ class TestKeeperBotRunOnce:
         monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
         _run(bot.run_once())
-        assert bot._last_allocation == 0.0  # unchanged after failed submission
+        assert bot._last_allocation == 90.0  # unchanged after failed submission
 
     def test_halts_when_circuit_breaker_tripped(self, monkeypatch):
         bot = self._bot()
@@ -304,7 +316,7 @@ class TestKeeperBotRunOnce:
 
     def test_records_heartbeat_on_success(self, monkeypatch):
         bot = self._bot()
-        bot._last_allocation = 0.0
+        bot._last_allocation = 90.0
         monkeypatch.setattr(
             kb,
             "get_keeper_status",
@@ -328,7 +340,7 @@ class TestKeeperBotRunOnce:
 
     def test_records_failure_on_exception(self, monkeypatch):
         bot = self._bot()
-        bot._last_allocation = 0.0
+        bot._last_allocation = 90.0
         monkeypatch.setattr(
             kb,
             "get_keeper_status",
@@ -349,3 +361,81 @@ class TestKeeperBotRunOnce:
 
         _run(bot.run_once())
         mock_failure.assert_called_once()
+
+    def test_rejects_when_rate_limit_exceeded(self, monkeypatch):
+        bot = self._bot()
+        monkeypatch.setattr(kb, "get_keeper_stats", lambda: {"count_last_24h": 4})
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        mock_execute = Mock()
+        mock_decision = Mock()
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
+        monkeypatch.setattr(kb, "record_keeper_decision", mock_decision)
+
+        _run(bot.run_once())
+
+        mock_execute.assert_not_called()
+        assert mock_decision.call_args.args[3] == "rejected"
+        assert mock_decision.call_args.args[2]["rate_limit"]["passed"] is False
+
+    def test_rejects_when_allocation_change_exceeds_limit(self, monkeypatch):
+        bot = self._bot()
+        bot._last_allocation = 0.0
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        mock_execute = Mock()
+        mock_decision = Mock()
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
+        monkeypatch.setattr(kb, "record_keeper_decision", mock_decision)
+
+        _run(bot.run_once())
+
+        mock_execute.assert_not_called()
+        assert mock_decision.call_args.args[2]["allocation_change"]["passed"] is False
+
+    def test_uses_last_submitted_allocation_after_restart(self, monkeypatch):
+        bot = self._bot()
+        monkeypatch.setattr(kb, "get_last_submitted_allocation", lambda: 0.0)
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        mock_execute = Mock()
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
+
+        _run(bot.run_once())
+
+        mock_execute.assert_not_called()
+
+    def test_manual_override_bypasses_policy_guards(self, monkeypatch):
+        bot = self._bot()
+        bot._last_allocation = 0.0
+        monkeypatch.setattr(kb, "get_manual_override", lambda: True)
+        monkeypatch.setattr(kb, "get_keeper_stats", lambda: {"count_last_24h": 4})
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        mock_execute = Mock(return_value={"hash": "x"})
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
+
+        _run(bot.run_once())
+
+        mock_execute.assert_called_once()
+
+    def test_records_auditable_decision_format(self, monkeypatch):
+        bot = self._bot()
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "execute_rebalance_transaction", Mock(return_value={"hash": "x"})
+        )
+        mock_decision = Mock()
+        monkeypatch.setattr(kb, "record_keeper_decision", mock_decision)
+
+        _run(bot.run_once())
+
+        score, allocations, checks, decision = mock_decision.call_args.args[:4]
+        assert score == 85.0
+        assert allocations == {"stable": 100.0, "risky": 0.0}
+        assert {
+            "rate_limit",
+            "allocation_change",
+            "rebalance_threshold",
+        } <= checks.keys()
+        assert decision == "approved"

@@ -7,7 +7,12 @@ from pydantic import BaseModel
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lib.database import get_keeper_status, reset_keeper_circuit
+from lib.database import (
+    get_keeper_stats,
+    get_keeper_status,
+    reset_keeper_circuit,
+    set_manual_override,
+)
 
 router = APIRouter(prefix="/keeper", tags=["keeper"])
 
@@ -16,6 +21,10 @@ class KeeperStatusResponse(BaseModel):
     state: str
     last_heartbeat: datetime
     consecutive_failures: int
+
+
+class KeeperOverrideRequest(BaseModel):
+    manual_override: bool
 
 
 @router.get("/status", response_model=KeeperStatusResponse)
@@ -63,3 +72,16 @@ def restart_circuit():
     """
     reset_keeper_circuit()
     return {"status": "ok", "message": "Circuit reset successfully"}
+
+
+@router.patch("/override", dependencies=[Depends(require_admin_token)])
+def set_override(request: KeeperOverrideRequest):
+    """Enables or disables the logged administrative policy override."""
+    set_manual_override(request.manual_override)
+    return {"manual_override": request.manual_override}
+
+
+@router.get("/stats")
+def get_stats():
+    """Returns recent keeper rebalance activity and policy decisions."""
+    return get_keeper_stats()

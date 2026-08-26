@@ -118,3 +118,26 @@ INSERT INTO keeper_status (id, consecutive_failures, last_heartbeat)
 VALUES (1, 0, now())
 ON CONFLICT DO NOTHING;
 
+-- Keeper rebalance policy state and its immutable audit trail.
+CREATE TABLE IF NOT EXISTS keeper_policy (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    manual_override BOOLEAN NOT NULL DEFAULT FALSE,
+    CHECK (id = 1)
+);
+
+INSERT INTO keeper_policy (id, manual_override)
+VALUES (1, FALSE)
+ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS keeper_decisions (
+    id BIGSERIAL PRIMARY KEY,
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    model_score NUMERIC NOT NULL,
+    proposed_allocations JSONB NOT NULL,
+    threshold_checks JSONB NOT NULL,
+    decision VARCHAR(20) NOT NULL CHECK (decision IN ('approved', 'rejected')),
+    transaction_submitted BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_keeper_decisions_timestamp
+ON keeper_decisions ("timestamp" DESC);
