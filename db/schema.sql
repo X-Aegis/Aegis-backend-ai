@@ -105,3 +105,16 @@ SELECT create_hypertable('drift_events', 'timestamp', if_not_exists => TRUE);
 
 -- Index to support pair + horizon lookups (the most common query pattern)
 CREATE INDEX IF NOT EXISTS idx_drift_events_pair_horizon ON drift_events (pair, horizon, "timestamp" DESC);
+
+-- Table to store keeper bot circuit breaker status
+CREATE TABLE IF NOT EXISTS keeper_status (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CHECK (id = 1)
+);
+
+INSERT INTO keeper_status (id, consecutive_failures, last_heartbeat)
+VALUES (1, 0, now())
+ON CONFLICT DO NOTHING;
+

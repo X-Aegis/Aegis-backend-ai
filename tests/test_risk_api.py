@@ -18,7 +18,11 @@ _TS = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _prediction_row(volatility_score=55.0, horizon=1, timestamp=_TS):
-    return {"timestamp": timestamp, "horizon": horizon, "volatility_score": volatility_score}
+    return {
+        "timestamp": timestamp,
+        "horizon": horizon,
+        "volatility_score": volatility_score,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -27,7 +31,10 @@ def _prediction_row(volatility_score=55.0, horizon=1, timestamp=_TS):
 
 
 def test_current_risk_returns_latest_prediction(monkeypatch):
-    monkeypatch.setattr("api.risk.get_current_prediction", lambda horizon: _prediction_row(55.0, horizon))
+    monkeypatch.setattr(
+        "api.risk.get_current_prediction",
+        lambda horizon: _prediction_row(55.0, horizon),
+    )
 
     response = client.get("/risk/current")
 
@@ -65,7 +72,9 @@ def test_current_risk_returns_404_when_no_predictions(monkeypatch):
 
 
 def test_current_risk_low_level_below_40(monkeypatch):
-    monkeypatch.setattr("api.risk.get_current_prediction", lambda horizon: _prediction_row(25.0))
+    monkeypatch.setattr(
+        "api.risk.get_current_prediction", lambda horizon: _prediction_row(25.0)
+    )
 
     response = client.get("/risk/current")
 
@@ -74,7 +83,9 @@ def test_current_risk_low_level_below_40(monkeypatch):
 
 
 def test_current_risk_high_level_at_80(monkeypatch):
-    monkeypatch.setattr("api.risk.get_current_prediction", lambda horizon: _prediction_row(80.0))
+    monkeypatch.setattr(
+        "api.risk.get_current_prediction", lambda horizon: _prediction_row(80.0)
+    )
 
     response = client.get("/risk/current")
 
@@ -95,11 +106,19 @@ def test_current_risk_rejects_invalid_horizon():
 
 def test_risk_history_returns_list_of_predictions(monkeypatch):
     rows = [
-        _prediction_row(70.0, timestamp=datetime(2026, 6, 1, 14, 0, tzinfo=timezone.utc)),
-        _prediction_row(55.0, timestamp=datetime(2026, 6, 1, 13, 0, tzinfo=timezone.utc)),
-        _prediction_row(30.0, timestamp=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)),
+        _prediction_row(
+            70.0, timestamp=datetime(2026, 6, 1, 14, 0, tzinfo=timezone.utc)
+        ),
+        _prediction_row(
+            55.0, timestamp=datetime(2026, 6, 1, 13, 0, tzinfo=timezone.utc)
+        ),
+        _prediction_row(
+            30.0, timestamp=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+        ),
     ]
-    monkeypatch.setattr("api.risk.get_prediction_history", lambda horizon, limit, offset: rows)
+    monkeypatch.setattr(
+        "api.risk.get_prediction_history", lambda horizon, limit, offset: rows
+    )
 
     response = client.get("/risk/history")
 
@@ -120,14 +139,18 @@ def test_risk_history_passes_pagination_params(monkeypatch):
 
     monkeypatch.setattr("api.risk.get_prediction_history", fake_history)
 
-    response = client.get("/risk/history", params={"horizon": 6, "limit": 50, "offset": 10})
+    response = client.get(
+        "/risk/history", params={"horizon": 6, "limit": 50, "offset": 10}
+    )
 
     assert response.status_code == 200
     assert captured == {"horizon": 6, "limit": 50, "offset": 10}
 
 
 def test_risk_history_returns_empty_list_when_no_data(monkeypatch):
-    monkeypatch.setattr("api.risk.get_prediction_history", lambda horizon, limit, offset: [])
+    monkeypatch.setattr(
+        "api.risk.get_prediction_history", lambda horizon, limit, offset: []
+    )
 
     response = client.get("/risk/history")
 
@@ -136,7 +159,9 @@ def test_risk_history_returns_empty_list_when_no_data(monkeypatch):
 
 
 def test_risk_history_rejects_limit_above_max(monkeypatch):
-    monkeypatch.setattr("api.risk.get_prediction_history", lambda horizon, limit, offset: [])
+    monkeypatch.setattr(
+        "api.risk.get_prediction_history", lambda horizon, limit, offset: []
+    )
 
     response = client.get("/risk/history", params={"limit": 9999})
 
@@ -144,7 +169,9 @@ def test_risk_history_rejects_limit_above_max(monkeypatch):
 
 
 def test_risk_history_rejects_negative_offset(monkeypatch):
-    monkeypatch.setattr("api.risk.get_prediction_history", lambda horizon, limit, offset: [])
+    monkeypatch.setattr(
+        "api.risk.get_prediction_history", lambda horizon, limit, offset: []
+    )
 
     response = client.get("/risk/history", params={"offset": -1})
 

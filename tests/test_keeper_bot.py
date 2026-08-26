@@ -29,6 +29,7 @@ def _run(coro):
 # compute_target_allocation
 # ---------------------------------------------------------------------------
 
+
 class TestComputeTargetAllocation:
     def test_high_volatility_returns_100_stable(self):
         assert kb.compute_target_allocation(80.0) == 100.0
@@ -46,6 +47,7 @@ class TestComputeTargetAllocation:
 # ---------------------------------------------------------------------------
 # execute_rebalance_transaction
 # ---------------------------------------------------------------------------
+
 
 class TestExecuteRebalanceTransaction:
     def test_raises_without_secret(self, monkeypatch):
@@ -168,7 +170,14 @@ class TestExecuteRebalanceTransaction:
 # KeeperBot.run_once
 # ---------------------------------------------------------------------------
 
+
 class TestKeeperBotRunOnce:
+    @pytest.fixture(autouse=True)
+    def setup_mocks(self, monkeypatch):
+        monkeypatch.setattr(kb, "get_keeper_status", lambda: None)
+        monkeypatch.setattr(kb, "record_keeper_heartbeat", Mock())
+        monkeypatch.setattr(kb, "record_keeper_failure", Mock())
+
     def _bot(self):
         return kb.KeeperBot()
 
@@ -228,7 +237,8 @@ class TestKeeperBotRunOnce:
     def test_handles_api_fetch_failure_gracefully(self, monkeypatch):
         bot = self._bot()
         monkeypatch.setattr(
-            kb, "fetch_volatility_score",
+            kb,
+            "fetch_volatility_score",
             AsyncMock(side_effect=httpx.RequestError("timeout")),
         )
         mock_execute = Mock()
@@ -261,3 +271,81 @@ class TestKeeperBotRunOnce:
 
         _run(bot.run_once())
         assert bot._last_allocation == 0.0  # unchanged after failed submission
+
+    def test_halts_when_circuit_breaker_tripped(self, monkeypatch):
+        bot = self._bot()
+        monkeypatch.setattr(
+            kb,
+            "get_keeper_status",
+            lambda: {
+                "consecutive_failures": 3,
+                "last_heartbeat": kb.datetime.now(kb.timezone.utc),
+            },
+        )
+        mock_fetch = AsyncMock()
+        monkeypatch.setattr(kb, "fetch_volatility_score", mock_fetch)
+        _run(bot.run_once())
+        mock_fetch.assert_not_called()
+
+    def test_halts_when_dead_man_active(self, monkeypatch):
+        bot = self._bot()
+        from datetime import timedelta
+
+        past = kb.datetime.now(kb.timezone.utc) - timedelta(hours=7)
+        monkeypatch.setattr(
+            kb,
+            "get_keeper_status",
+            lambda: {"consecutive_failures": 0, "last_heartbeat": past},
+        )
+        mock_fetch = AsyncMock()
+        monkeypatch.setattr(kb, "fetch_volatility_score", mock_fetch)
+        _run(bot.run_once())
+        mock_fetch.assert_not_called()
+
+    def test_records_heartbeat_on_success(self, monkeypatch):
+        bot = self._bot()
+        bot._last_allocation = 0.0
+        monkeypatch.setattr(
+            kb,
+            "get_keeper_status",
+            lambda: {
+                "consecutive_failures": 0,
+                "last_heartbeat": kb.datetime.now(kb.timezone.utc),
+            },
+        )
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "execute_rebalance_transaction", Mock(return_value={"hash": "x"})
+        )
+        mock_heartbeat = Mock()
+        monkeypatch.setattr(kb, "record_keeper_heartbeat", mock_heartbeat)
+
+        _run(bot.run_once())
+        mock_heartbeat.assert_called_once()
+
+    def test_records_failure_on_exception(self, monkeypatch):
+        bot = self._bot()
+        bot._last_allocation = 0.0
+        monkeypatch.setattr(
+            kb,
+            "get_keeper_status",
+            lambda: {
+                "consecutive_failures": 0,
+                "last_heartbeat": kb.datetime.now(kb.timezone.utc),
+            },
+        )
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "execute_rebalance_transaction", Mock(side_effect=RuntimeError("fail"))
+        )
+        mock_failure = Mock()
+        monkeypatch.setattr(kb, "record_keeper_failure", mock_failure)
+
+        _run(bot.run_once())
+        mock_failure.assert_called_once()

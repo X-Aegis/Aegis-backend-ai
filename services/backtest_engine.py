@@ -28,7 +28,9 @@ def compute_volatility_scores(df, window):
     if max_std == min_std:
         df["volatility_score"] = df["rolling_std"].where(df["rolling_std"].isna(), 0.0)
     else:
-        df["volatility_score"] = (df["rolling_std"] - min_std) / (max_std - min_std) * 100
+        df["volatility_score"] = (
+            (df["rolling_std"] - min_std) / (max_std - min_std) * 100
+        )
 
     return df
 
@@ -97,7 +99,9 @@ def _simulate(df, threshold, initial_capital, stable_apy, strategy_enabled):
         elapsed_days = (timestamps[i] - timestamps[i - 1]).total_seconds() / 86400.0
         total_elapsed_days += elapsed_days
 
-        should_be_stable = strategy_enabled and scores[i - 1] is not None and scores[i - 1] > threshold
+        should_be_stable = (
+            strategy_enabled and scores[i - 1] is not None and scores[i - 1] > threshold
+        )
 
         if should_be_stable != in_stable:
             switches += 1
@@ -110,12 +114,14 @@ def _simulate(df, threshold, initial_capital, stable_apy, strategy_enabled):
             period_return = (prev_rate / curr_rate) - 1
 
         period_returns.append(period_return)
-        value *= (1 + period_return)
+        value *= 1 + period_return
         values.append(value)
 
     # Average calendar span of a period, used to annualize the Sharpe ratio for
     # series that may be sampled hourly, daily, etc. (or irregularly).
-    periods_per_year = (total_periods * 365 / total_elapsed_days) if total_elapsed_days > 0 else 0.0
+    periods_per_year = (
+        (total_periods * 365 / total_elapsed_days) if total_elapsed_days > 0 else 0.0
+    )
 
     return {
         "final_value": value,
@@ -124,7 +130,9 @@ def _simulate(df, threshold, initial_capital, stable_apy, strategy_enabled):
         "sharpe_ratio": _sharpe_ratio(period_returns, periods_per_year),
         "win_rate_pct": _win_rate_pct(period_returns),
         "num_regime_switches": switches if strategy_enabled else 0,
-        "time_in_stable_pct": (stable_periods / total_periods * 100) if strategy_enabled and total_periods else 0.0,
+        "time_in_stable_pct": (stable_periods / total_periods * 100)
+        if strategy_enabled and total_periods
+        else 0.0,
     }
 
 
@@ -148,17 +156,26 @@ def run_backtest(rate_rows, volatility_window, threshold, initial_capital, stabl
         )
 
     if (df["rate"] <= 0).any():
-        raise ValueError("Non-positive rate encountered in fx_rates series; cannot backtest.")
+        raise ValueError(
+            "Non-positive rate encountered in fx_rates series; cannot backtest."
+        )
 
     scored = compute_volatility_scores(df, volatility_window)
 
-    strategy_metrics = _simulate(scored, threshold, initial_capital, stable_apy, strategy_enabled=True)
-    baseline_metrics = _simulate(scored, threshold, initial_capital, stable_apy, strategy_enabled=False)
+    strategy_metrics = _simulate(
+        scored, threshold, initial_capital, stable_apy, strategy_enabled=True
+    )
+    baseline_metrics = _simulate(
+        scored, threshold, initial_capital, stable_apy, strategy_enabled=False
+    )
 
     comparison = {
-        "return_improvement_pct": strategy_metrics["total_return_pct"] - baseline_metrics["total_return_pct"],
-        "drawdown_reduction_pct": baseline_metrics["max_drawdown_pct"] - strategy_metrics["max_drawdown_pct"],
-        "sharpe_improvement": strategy_metrics["sharpe_ratio"] - baseline_metrics["sharpe_ratio"],
+        "return_improvement_pct": strategy_metrics["total_return_pct"]
+        - baseline_metrics["total_return_pct"],
+        "drawdown_reduction_pct": baseline_metrics["max_drawdown_pct"]
+        - strategy_metrics["max_drawdown_pct"],
+        "sharpe_improvement": strategy_metrics["sharpe_ratio"]
+        - baseline_metrics["sharpe_ratio"],
     }
 
     return {

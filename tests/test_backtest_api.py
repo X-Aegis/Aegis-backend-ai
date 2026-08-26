@@ -11,7 +11,9 @@ from api.main import app
 client = TestClient(app)
 
 
-def _series(rates, start=datetime(2026, 1, 1, tzinfo=timezone.utc), step=timedelta(hours=1)):
+def _series(
+    rates, start=datetime(2026, 1, 1, tzinfo=timezone.utc), step=timedelta(hours=1)
+):
     return [(start + i * step, rate) for i, rate in enumerate(rates)]
 
 
@@ -33,7 +35,9 @@ def _request_body(**overrides):
 def test_create_backtest_persists_and_returns_report(monkeypatch):
     rows = _series([1500.0 + (i % 4) for i in range(30)])
 
-    monkeypatch.setattr("api.backtest.get_fx_rate_series", lambda pair, start, end: rows)
+    monkeypatch.setattr(
+        "api.backtest.get_fx_rate_series", lambda pair, start, end: rows
+    )
 
     saved = {}
 
@@ -64,13 +68,17 @@ def test_create_backtest_returns_404_when_no_rates(monkeypatch):
 
 
 def test_create_backtest_returns_400_for_invalid_date_range():
-    response = client.post("/backtest", json=_request_body(start_date="2026-01-10", end_date="2026-01-01"))
+    response = client.post(
+        "/backtest", json=_request_body(start_date="2026-01-10", end_date="2026-01-01")
+    )
     assert response.status_code == 400
 
 
 def test_create_backtest_returns_422_for_insufficient_data(monkeypatch):
     rows = _series([1500.0, 1501.0, 1502.0])
-    monkeypatch.setattr("api.backtest.get_fx_rate_series", lambda pair, start, end: rows)
+    monkeypatch.setattr(
+        "api.backtest.get_fx_rate_series", lambda pair, start, end: rows
+    )
 
     response = client.post("/backtest", json=_request_body(volatility_window=10))
 
@@ -91,7 +99,12 @@ def test_get_backtest_results_returns_stored_reports(monkeypatch):
         "start_date": datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
         "end_date": datetime(2026, 1, 5, tzinfo=timezone.utc).date(),
         "data_points_used": 30,
-        "params": {"volatility_window": 5, "threshold": 50, "initial_capital": 10000, "stable_apy": 0},
+        "params": {
+            "volatility_window": 5,
+            "threshold": 50,
+            "initial_capital": 10000,
+            "stable_apy": 0,
+        },
         "strategy_metrics": {
             "final_value": 10500.0,
             "total_return_pct": 5.0,
@@ -110,13 +123,19 @@ def test_get_backtest_results_returns_stored_reports(monkeypatch):
             "num_regime_switches": 0,
             "time_in_stable_pct": 0.0,
         },
-        "comparison": {"return_improvement_pct": 3.0, "drawdown_reduction_pct": 2.0, "sharpe_improvement": 0.7},
+        "comparison": {
+            "return_improvement_pct": 3.0,
+            "drawdown_reduction_pct": 2.0,
+            "sharpe_improvement": 0.7,
+        },
     }
 
     captured = {}
 
     def fake_list(pair=None, strategy_name=None, limit=20, offset=0):
-        captured.update(pair=pair, strategy_name=strategy_name, limit=limit, offset=offset)
+        captured.update(
+            pair=pair, strategy_name=strategy_name, limit=limit, offset=offset
+        )
         return [stored_row]
 
     monkeypatch.setattr("api.backtest.list_backtest_results", fake_list)

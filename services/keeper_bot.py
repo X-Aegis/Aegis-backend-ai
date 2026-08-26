@@ -22,6 +22,14 @@ from stellar_sdk import Keypair, Server, TransactionBuilder, scval
 # ---------------------------------------------------------------------------
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from datetime import datetime, timezone
+
+from lib.database import (
+    get_keeper_status,
+    record_keeper_failure,
+    record_keeper_heartbeat,
+)
+
 load_dotenv()
 
 # ---------------------------------------------------------------------------
@@ -42,7 +50,9 @@ HIGH_VOLATILITY_CUTOFF: float = float(os.getenv("HIGH_VOLATILITY_CUTOFF", "80.0"
 POLL_INTERVAL_SECONDS: int = int(os.getenv("POLL_INTERVAL_SECONDS", "3600"))  # 1 hour
 
 # Soroban RPC
-SOROBAN_RPC_URL: str = os.getenv("SOROBAN_RPC_URL", "https://soroban-testnet.stellar.org")
+SOROBAN_RPC_URL: str = os.getenv(
+    "SOROBAN_RPC_URL", "https://soroban-testnet.stellar.org"
+)
 SOROBAN_CONTRACT_ID: str = os.getenv("SOROBAN_CONTRACT_ID", "")
 SOROBAN_SOURCE_ACCOUNT: str = os.getenv("SOROBAN_SOURCE_ACCOUNT", "")
 SOROBAN_NETWORK_PASSPHRASE: str = os.getenv(
@@ -79,6 +89,7 @@ log = logging.getLogger("keeper_bot")
 # Allocation logic
 # ---------------------------------------------------------------------------
 
+
 def compute_target_allocation(volatility_score: float) -> float:
     """
     Returns the target percentage of the vault that should be in *stable* assets
@@ -97,6 +108,7 @@ def compute_target_allocation(volatility_score: float) -> float:
 # Transaction building & Submission (Stellar SDK)
 # ---------------------------------------------------------------------------
 
+
 def execute_rebalance_transaction(
     target_stable_pct: float,
     volatility_score: float,
@@ -109,17 +121,19 @@ def execute_rebalance_transaction(
     """
     if SIGNING_BACKEND in ["aws_kms", "vault"]:
         # TODO: Implement XDR parsing and raw signature injection for enterprise HSMs.
-        log.warning("Enterprise signing (KMS/Vault) selected but not yet implemented for Soroban XDR. Falling back to local wallet if available.")
+        log.warning(
+            "Enterprise signing (KMS/Vault) selected but not yet implemented for Soroban XDR. Falling back to local wallet if available."
+        )
 
     if not source_secret:
         raise OSError("ADMIN_SECRET_KEY is not set. Cannot sign transaction.")
 
     server = Server(SOROBAN_RPC_URL)
     keypair = Keypair.from_secret(source_secret)
-    
+
     log.info("Loading account details for %s...", keypair.public_key)
     source_account = server.load_account(keypair.public_key)
-    
+
     # 1. Build the base transaction
     tx = (
         TransactionBuilder(
@@ -130,35 +144,37 @@ def execute_rebalance_transaction(
         .append_invoke_contract_function_op(
             contract_id=contract_id,
             function_name="rebalance",
-            parameters=[scval.to_address(keypair.public_key)]
+            parameters=[scval.to_address(keypair.public_key)],
         )
         .set_timeout(30)
         .build()
     )
-    
+
     # 2. Simulate transaction to get footprint and resource fees
     log.info("Simulating transaction to fetch Soroban footprint...")
     sim_result = server.simulate_transaction(tx)
-    
+
     if hasattr(sim_result, "error") and sim_result.error:
         raise RuntimeError(f"Simulation failed: {sim_result.error}")
-        
+
     log.info("Simulation successful. Applying footprint and fees.")
     tx.soroban_data = sim_result.transactionData
-    
+
     if hasattr(sim_result, "minResourceFee"):
         tx.add_resource_fee(int(sim_result.minResourceFee))
-        
+
     # 3. Sign the transaction
     tx.sign(keypair)
-    
+
     # 4. Submit to network
     log.info("Submitting transaction to network...")
     send_response = server.send_transaction(tx)
-    
+
     if send_response.get("errorResultXdr"):
-        raise RuntimeError(f"Transaction submission failed: {send_response['errorResultXdr']}")
-        
+        raise RuntimeError(
+            f"Transaction submission failed: {send_response['errorResultXdr']}"
+        )
+
     log.info("Transaction submitted! Hash: %s", send_response.get("hash"))
     return send_response
 
@@ -166,6 +182,7 @@ def execute_rebalance_transaction(
 # ---------------------------------------------------------------------------
 # Model API polling
 # ---------------------------------------------------------------------------
+
 
 async def fetch_volatility_score() -> float:
     """Fetches the latest volatility score from the Model API."""
@@ -191,6 +208,7 @@ async def fetch_volatility_score() -> float:
 # Core keeper loop
 # ---------------------------------------------------------------------------
 
+
 class KeeperBot:
     """Stateful keeper that remembers the last submitted allocation."""
 
@@ -199,6 +217,26 @@ class KeeperBot:
 
     async def run_once(self) -> None:
         """Single poll-and-rebalance cycle."""
+        # 0. Check circuit breaker and dead-man switch
+        status = get_keeper_status()
+        if status:
+            failures = status.get("consecutive_failures", 0)
+            last_heartbeat = status.get("last_heartbeat")
+            if last_heartbeat:
+                now = datetime.now(timezone.utc)
+                diff_hours = (now - last_heartbeat).total_seconds() / 3600
+                if diff_hours >= 6:
+                    log.error(
+                        "DEAD-MAN SWITCH ACTIVATED (no heartbeat in >= 6 hours). Halting keeper operations."
+                    )
+                    return
+
+            if failures >= 3:
+                log.error(
+                    "Circuit breaker TRIPPED (>= 3 failures). Halting keeper operations."
+                )
+                return
+
         # 1. Fetch current volatility score
         try:
             score = await fetch_volatility_score()
@@ -247,9 +285,14 @@ class KeeperBot:
                 source_secret=ADMIN_SECRET_KEY,
             )
             self._last_allocation = target
-            log.info("Rebalance submitted successfully. New allocation: %.1f %% stable.", target)
+            log.info(
+                "Rebalance submitted successfully. New allocation: %.1f %% stable.",
+                target,
+            )
+            record_keeper_heartbeat()
         except Exception as exc:  # noqa: BLE001 - keep the hourly loop alive on any SDK error
             log.error("Soroban transaction failed: %s", exc)
+            record_keeper_failure()
 
     async def run(self) -> None:
         """Main loop: poll every POLL_INTERVAL_SECONDS."""
