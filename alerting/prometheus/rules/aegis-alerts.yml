@@ -1,0 +1,103 @@
+# Prometheus alerting rules for X-Aegis backend / keeper / vault.
+#
+# Metric contract (exported by the BK-15a Prometheus client, issue #36):
+#   aegis_model_drift_detected{pair,horizon}          gauge  1 when ADWIN or Page-Hinkley fired
+#   aegis_keeper_circuit_breaker_open                 gauge  1 when the keeper refuses new rebalances
+#   aegis_datasource_up{source}                       gauge  1 healthy / 0 down (fixer, openexchangerates, stellar_rpc, database)
+#   aegis_rebalance_failures_total                    counter  failed Soroban rebalance submissions
+#   aegis_vault_tvl                                   gauge  latest vault Total Value Locked (same unit as vault_snapshots.tvl)
+#
+# Load this file from prometheus.yml via rule_files.
+
+groups:
+  - name: aegis.model
+    rules:
+      - alert: ModelDriftDetected
+        expr: max by (pair, horizon) (aegis_model_drift_detected) == 1
+        for: 5m
+        labels:
+          severity: warning
+          component: model
+          team: backend-ai
+        annotations:
+          summary: "Model drift detected for {{ $labels.pair }} (horizon {{ $labels.horizon }}h)"
+          description: >-
+            ADWIN or Page-Hinkley reported concept drift on the FX volatility
+            error stream for pair={{ $labels.pair }} horizon={{ $labels.horizon }}.
+            Rolling MAE/RMSE may be degrading; predictions can still be served
+            but allocation recommendations are less trustworthy.
+          runbook_url: https://github.com/X-Aegis/Aegis-backend-ai/blob/main/runbooks/model-drift-detected.md
+
+  - name: aegis.keeper
+    rules:
+      - alert: KeeperCircuitBreakerActivated
+        expr: aegis_keeper_circuit_breaker_open == 1
+        for: 1m
+        labels:
+          severity: critical
+          component: keeper
+          team: backend-ai
+        annotations:
+          summary: "Keeper circuit breaker is open — automatic rebalances are blocked"
+          description: >-
+            Consecutive Soroban rebalance failures opened the keeper circuit
+            breaker. The vault will not auto-rebalance until the breaker is
+            reset after a successful health check.
+          runbook_url: https://github.com/X-Aegis/Aegis-backend-ai/blob/main/runbooks/keeper-circuit-breaker-activated.md
+
+      - alert: RebalanceFailed
+        expr: increase(aegis_rebalance_failures_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          component: keeper
+          team: backend-ai
+        annotations:
+          summary: "Keeper rebalance submission failed in the last 15 minutes"
+          description: >-
+            One or more `rebalance` transactions failed (simulation, signing,
+            or Soroban RPC submit). Check keeper logs and stellar RPC health
+            before the circuit breaker trips.
+          runbook_url: https://github.com/X-Aegis/Aegis-backend-ai/blob/main/runbooks/rebalance-failed.md
+
+  - name: aegis.datasource
+    rules:
+      - alert: DataSourceDown
+        expr: aegis_datasource_up == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: ingestion
+          team: backend-ai
+        annotations:
+          summary: "Data source {{ $labels.source }} has been down for 5 minutes"
+          description: >-
+            Source {{ $labels.source }} is reporting aegis_datasource_up=0.
+            FX ingestion (Fixer.io / Open Exchange Rates) or a runtime
+            dependency (database, Stellar RPC) is unreachable. Stale rates
+            will poison volatility scores and keeper decisions.
+          runbook_url: https://github.com/X-Aegis/Aegis-backend-ai/blob/main/runbooks/data-source-down.md
+
+  - name: aegis.vault
+    rules:
+      - alert: VaultTVLSuddenDrop
+        expr: |
+          (
+            aegis_vault_tvl
+            / clamp_min(aegis_vault_tvl offset 1h, 1e-9)
+          ) < 0.9
+          and
+          (aegis_vault_tvl offset 1h) > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: vault
+          team: backend-ai
+        annotations:
+          summary: "Vault TVL dropped more than 10% in the last hour"
+          description: >-
+            Current TVL is more than 10% below the value from 1 hour ago
+            ({{ $value | humanizePercentage }} of the prior reading). This can
+            indicate a run, an oracle/pricing fault, or a failed rebalance that
+            left the vault exposed.
+          runbook_url: https://github.com/X-Aegis/Aegis-backend-ai/blob/main/runbooks/vault-tvl-sudden-drop.md

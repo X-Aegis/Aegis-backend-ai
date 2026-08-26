@@ -73,6 +73,7 @@ pip install -r requirements.txt
 ## 📚 Documentation
 *   📘 **[Backend Roadmap](./docs/BACKEND_ROADMAP.md)**
 *   🤖 **[AI Model Guide](./docs/AI_MODEL_GUIDE.md)**
+*   🚨 **[Alerting rules & runbooks](./alerting/README.md)**
 
 ---
 
