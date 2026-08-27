@@ -5,6 +5,7 @@ Tests for services/keeper_bot.py
 import asyncio
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -19,6 +20,9 @@ import services.keeper_bot as kb
 TEST_KEYPAIR = StellarKeypair.random()
 TEST_PUBLIC_KEY = TEST_KEYPAIR.public_key
 TEST_SECRET_KEY = TEST_KEYPAIR.secret
+
+_TS_NOW = datetime(2026, 8, 22, 12, 0, 0, tzinfo=timezone.utc)
+_TS_LATER = _TS_NOW + timedelta(hours=1)
 
 
 def _run(coro):
@@ -167,6 +171,146 @@ class TestExecuteRebalanceTransaction:
 
 
 # ---------------------------------------------------------------------------
+# KeeperBot._should_rebalance
+# ---------------------------------------------------------------------------
+
+class TestShouldRebalance:
+    def test_triggers_on_score_above_cutoff(self):
+        bot = kb.KeeperBot()
+        bot._last_allocation = 0.0
+        assert bot._should_rebalance(score=85.0, target=100.0, signal_ts=_TS_NOW)
+
+    def test_triggers_on_allocation_delta_above_threshold(self, monkeypatch):
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
+        bot = kb.KeeperBot()
+        bot._last_allocation = 0.0
+        # Score below cutoff, but allocation delta is 100% (0 → 100)
+        assert bot._should_rebalance(score=50.0, target=100.0, signal_ts=_TS_NOW)
+
+    def test_skips_when_allocation_delta_below_threshold(self, monkeypatch):
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
+        bot = kb.KeeperBot()
+        bot._last_allocation = 100.0
+        # Score below cutoff, allocation delta is 0
+        assert not bot._should_rebalance(score=50.0, target=100.0, signal_ts=_TS_NOW)
+
+    def test_skips_when_same_signal_window(self, monkeypatch):
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
+        bot = kb.KeeperBot()
+        bot._last_signal_window = _TS_NOW
+        # Same timestamp → should skip
+        assert not bot._should_rebalance(score=90.0, target=100.0, signal_ts=_TS_NOW)
+
+    def test_skips_when_older_signal_window(self, monkeypatch):
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
+        bot = kb.KeeperBot()
+        bot._last_signal_window = _TS_LATER
+        # Older timestamp → should skip
+        assert not bot._should_rebalance(score=90.0, target=100.0, signal_ts=_TS_NOW)
+
+    def test_triggers_on_newer_signal_window(self, monkeypatch):
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
+        bot = kb.KeeperBot()
+        bot._last_signal_window = _TS_NOW
+        # Newer timestamp → should trigger
+        assert bot._should_rebalance(score=90.0, target=100.0, signal_ts=_TS_LATER)
+
+    def test_first_run_always_triggers(self):
+        bot = kb.KeeperBot()
+        assert bot._should_rebalance(score=30.0, target=0.0, signal_ts=_TS_NOW)
+
+
+# ---------------------------------------------------------------------------
+# KeeperBot._submit_with_retry
+# ---------------------------------------------------------------------------
+
+class TestSubmitWithRetry:
+    def test_returns_on_first_success(self, monkeypatch):
+        bot = kb.KeeperBot()
+        fake_result = {"hash": "tx_success"}
+        monkeypatch.setattr(
+            kb, "execute_rebalance_transaction", Mock(return_value=fake_result)
+        )
+
+        result = _run(
+            bot._submit_with_retry(
+                target_stable_pct=100.0,
+                volatility_score=85.0,
+                contract_id="C",
+                source_secret=TEST_SECRET_KEY,
+            )
+        )
+        assert result == fake_result
+
+    def test_retries_on_failure_then_succeeds(self, monkeypatch):
+        bot = kb.KeeperBot()
+        call_count = 0
+        fake_result = {"hash": "tx_success"}
+
+        def _mock_execute(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise RuntimeError("RPC timeout")
+            return fake_result
+
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", _mock_execute)
+        monkeypatch.setattr(kb, "MAX_RETRIES", 3)
+        monkeypatch.setattr(kb, "RETRY_BACKOFF_BASE", 0.01)  # fast for tests
+
+        result = _run(
+            bot._submit_with_retry(
+                target_stable_pct=100.0,
+                volatility_score=85.0,
+                contract_id="C",
+                source_secret=TEST_SECRET_KEY,
+            )
+        )
+        assert result == fake_result
+        assert call_count == 3
+
+    def test_returns_none_after_all_retries_exhausted(self, monkeypatch):
+        bot = kb.KeeperBot()
+        monkeypatch.setattr(
+            kb,
+            "execute_rebalance_transaction",
+            Mock(side_effect=RuntimeError("RPC down")),
+        )
+        monkeypatch.setattr(kb, "MAX_RETRIES", 2)
+        monkeypatch.setattr(kb, "RETRY_BACKOFF_BASE", 0.01)
+
+        result = _run(
+            bot._submit_with_retry(
+                target_stable_pct=100.0,
+                volatility_score=85.0,
+                contract_id="C",
+                source_secret=TEST_SECRET_KEY,
+            )
+        )
+        assert result is None
+
+    def test_logs_tx_hash_on_success(self, monkeypatch, caplog):
+        bot = kb.KeeperBot()
+        fake_result = {"hash": "abc123def"}
+        monkeypatch.setattr(
+            kb, "execute_rebalance_transaction", Mock(return_value=fake_result)
+        )
+
+        with caplog.at_level("INFO"):
+            _run(
+                bot._submit_with_retry(
+                    target_stable_pct=100.0,
+                    volatility_score=85.0,
+                    contract_id="C",
+                    source_secret=TEST_SECRET_KEY,
+                )
+            )
+        assert any("tx_hash=abc123def" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
 # KeeperBot.run_once
 # ---------------------------------------------------------------------------
 
@@ -199,14 +343,17 @@ class TestKeeperBotRunOnce:
 
     def test_skips_when_delta_below_threshold(self, monkeypatch):
         bot = self._bot()
-        bot._last_allocation = 100.0  # already fully stable
+        bot._last_allocation = 0.0  # currently in risky allocation
 
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
 
-        # Score still high → target stays 100 % stable → delta == 0
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=90.0))
+        # Score below cutoff → target stays 0 % stable → delta == 0 < threshold
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(50.0, _TS_NOW))
+        )
         mock_execute = Mock()
         monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
@@ -218,9 +365,12 @@ class TestKeeperBotRunOnce:
         bot._last_allocation = 90.0
 
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
         mock_execute = Mock(return_value={"hash": "x"})
         monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
@@ -228,11 +378,31 @@ class TestKeeperBotRunOnce:
         mock_execute.assert_called_once()
         assert bot._last_allocation == 100.0
 
+    def test_triggers_rebalance_when_score_above_cutoff(self, monkeypatch):
+        """Score >= HIGH_VOLATILITY_CUTOFF triggers rebalance even with no allocation delta."""
+        bot = self._bot()
+        bot._last_allocation = 100.0  # already at target allocation
+
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_LATER))
+        )
+        mock_execute = Mock(return_value={"hash": "x"})
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
+
+        _run(bot.run_once())
+        mock_execute.assert_called_once()
+
     def test_skips_submission_when_contract_id_missing(self, monkeypatch):
         bot = self._bot()
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
         mock_execute = Mock()
         monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
@@ -243,7 +413,9 @@ class TestKeeperBotRunOnce:
         bot = self._bot()
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", "")
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
         mock_execute = Mock()
         monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
@@ -268,7 +440,11 @@ class TestKeeperBotRunOnce:
         bot = self._bot()
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
+        monkeypatch.setattr(kb, "MAX_RETRIES", 1)
+        monkeypatch.setattr(kb, "RETRY_BACKOFF_BASE", 0.01)
         mock_execute = Mock(side_effect=RuntimeError("RPC down"))
         monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
@@ -279,9 +455,14 @@ class TestKeeperBotRunOnce:
         bot = self._bot()
         bot._last_allocation = 90.0
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
+        monkeypatch.setattr(kb, "MAX_RETRIES", 1)
+        monkeypatch.setattr(kb, "RETRY_BACKOFF_BASE", 0.01)
         mock_execute = Mock(side_effect=RuntimeError("RPC down"))
         monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
@@ -305,7 +486,6 @@ class TestKeeperBotRunOnce:
 
     def test_halts_when_dead_man_active(self, monkeypatch):
         bot = self._bot()
-        from datetime import timedelta
 
         past = kb.datetime.now(kb.timezone.utc) - timedelta(hours=7)
         monkeypatch.setattr(
@@ -332,7 +512,9 @@ class TestKeeperBotRunOnce:
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
         monkeypatch.setattr(
             kb, "execute_rebalance_transaction", Mock(return_value={"hash": "x"})
         )
@@ -356,7 +538,9 @@ class TestKeeperBotRunOnce:
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
         monkeypatch.setattr(
             kb, "execute_rebalance_transaction", Mock(side_effect=RuntimeError("fail"))
         )
@@ -369,7 +553,9 @@ class TestKeeperBotRunOnce:
     def test_rejects_when_rate_limit_exceeded(self, monkeypatch):
         bot = self._bot()
         monkeypatch.setattr(kb, "get_keeper_stats", lambda: {"count_last_24h": 4})
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
         mock_execute = Mock()
         mock_decision = Mock()
         monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
@@ -384,7 +570,9 @@ class TestKeeperBotRunOnce:
     def test_rejects_when_allocation_change_exceeds_limit(self, monkeypatch):
         bot = self._bot()
         bot._last_allocation = 0.0
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
         mock_execute = Mock()
         mock_decision = Mock()
         monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
@@ -398,7 +586,9 @@ class TestKeeperBotRunOnce:
     def test_uses_last_submitted_allocation_after_restart(self, monkeypatch):
         bot = self._bot()
         monkeypatch.setattr(kb, "get_last_submitted_allocation", lambda: 0.0)
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
         mock_execute = Mock()
         monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
@@ -413,7 +603,9 @@ class TestKeeperBotRunOnce:
         monkeypatch.setattr(kb, "get_keeper_stats", lambda: {"count_last_24h": 4})
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
         mock_execute = Mock(return_value={"hash": "x"})
         monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
 
@@ -425,7 +617,9 @@ class TestKeeperBotRunOnce:
         bot = self._bot()
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
         monkeypatch.setattr(
             kb, "execute_rebalance_transaction", Mock(return_value={"hash": "x"})
         )
@@ -452,7 +646,9 @@ class TestKeeperBotRunOnce:
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
 
         def _revoked():
             raise kb.SigningKeyRevokedError("key alias/x was revoked at ...: leak")
@@ -475,7 +671,9 @@ class TestKeeperBotRunOnce:
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
         monkeypatch.setattr(
             kb,
             "execute_rebalance_transaction",
@@ -501,7 +699,9 @@ class TestKeeperBotRunOnce:
         monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
         monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
         monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
-        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(85.0, _TS_NOW))
+        )
         monkeypatch.setattr(
             kb, "execute_rebalance_transaction", Mock(return_value={"hash": "x"})
         )
@@ -515,6 +715,143 @@ class TestKeeperBotRunOnce:
         mock_heartbeat.assert_called_once()
         assert bot._last_allocation == 100.0
 
+    # -- Idempotency tests (BK-5) --------------------------------------------
+
+    def test_idempotent_skips_same_signal_window(self, monkeypatch):
+        """Second run with same signal timestamp should not rebalance."""
+        bot = self._bot()
+        bot._last_allocation = 0.0
+        bot._last_signal_window = _TS_NOW
+
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(90.0, _TS_NOW))
+        )
+        mock_execute = Mock()
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
+
+        _run(bot.run_once())
+        mock_execute.assert_not_called()
+
+    def test_idempotent_allows_newer_signal_window(self, monkeypatch):
+        """Rebalance should proceed when a newer signal window arrives."""
+        bot = self._bot()
+        bot._last_allocation = 0.0
+        bot._last_signal_window = _TS_NOW
+
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
+        monkeypatch.setattr(kb, "MAX_ALLOCATION_CHANGE_PCT", 200.0)  # bypass guard
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(90.0, _TS_LATER))
+        )
+        mock_execute = Mock(return_value={"hash": "x"})
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
+
+        _run(bot.run_once())
+        mock_execute.assert_called_once()
+
+    # -- Retry tests (BK-5) ---------------------------------------------------
+
+    def test_retries_on_tx_failure(self, monkeypatch):
+        """KeeperBot.run_once should retry failed transactions."""
+        bot = self._bot()
+        call_count = 0
+        fake_result = {"hash": "retry_success"}
+
+        def _mock_execute(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise RuntimeError("Temporary RPC error")
+            return fake_result
+
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(kb, "MAX_RETRIES", 3)
+        monkeypatch.setattr(kb, "RETRY_BACKOFF_BASE", 0.01)
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(90.0, _TS_NOW))
+        )
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", _mock_execute)
+
+        _run(bot.run_once())
+        assert call_count == 2
+        assert bot._last_allocation == 100.0
+
+    def test_logs_tx_hash_on_success(self, monkeypatch, caplog):
+        """Successful rebalance should log tx hash."""
+        bot = self._bot()
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "HIGH_VOLATILITY_CUTOFF", 80.0)
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(
+            kb, "fetch_volatility_score", AsyncMock(return_value=(90.0, _TS_NOW))
+        )
+        monkeypatch.setattr(
+            kb, "execute_rebalance_transaction", Mock(return_value={"hash": "tx123"})
+        )
+
+        with caplog.at_level("INFO"):
+            _run(bot.run_once())
+        assert any("tx_hash=tx123" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# fetch_volatility_score
+# ---------------------------------------------------------------------------
+
+class TestFetchVolatilityScore:
+    def test_returns_score_and_timestamp(self, monkeypatch):
+        fake_response = Mock()
+        fake_response.json.return_value = {
+            "volatility_score": 72.5,
+            "risk_level": "MEDIUM",
+            "timestamp": "2026-08-22T12:00:00Z",
+            "horizon": 1,
+        }
+        fake_response.raise_for_status = Mock()
+
+        fake_client = AsyncMock()
+        fake_client.get = AsyncMock(return_value=fake_response)
+        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+        fake_client.__aexit__ = AsyncMock(return_value=False)
+
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kwargs: fake_client)
+
+        score, ts = _run(kb.fetch_volatility_score())
+        assert score == 72.5
+        assert ts.year == 2026
+        assert ts.month == 8
+
+    def test_raises_on_http_error(self, monkeypatch):
+        fake_response = Mock()
+        fake_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "500", request=Mock(), response=Mock()
+        )
+
+        fake_client = AsyncMock()
+        fake_client.get = AsyncMock(return_value=fake_response)
+        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+        fake_client.__aexit__ = AsyncMock(return_value=False)
+
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kwargs: fake_client)
+
+        with pytest.raises(httpx.HTTPStatusError):
+            _run(kb.fetch_volatility_score())
+
+
+# ---------------------------------------------------------------------------
+# ExecuteRebalanceEnterpriseBackends
+# ---------------------------------------------------------------------------
 
 class TestExecuteRebalanceEnterpriseBackends:
     def test_vault_backend_resolves_seed_via_key_manager(self, monkeypatch):
