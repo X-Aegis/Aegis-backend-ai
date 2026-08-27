@@ -152,3 +152,48 @@ CREATE TABLE IF NOT EXISTS keeper_decisions (
 
 CREATE INDEX IF NOT EXISTS idx_keeper_decisions_timestamp
 ON keeper_decisions ("timestamp" DESC);
+
+-- ---------------------------------------------------------------------------
+-- Secure key management (BK-11)
+-- ---------------------------------------------------------------------------
+
+-- Current and historical keeper signing-key configuration. Rotation inserts a
+-- new active row and flips the previous one to active = FALSE in one
+-- transaction (see lib/database.insert_signing_config), so there is never a
+-- window without an active key. The signing seed itself is NEVER stored here —
+-- only the KMS alias / Vault path (key_id) and the sha256 of the public key.
+CREATE TABLE IF NOT EXISTS keeper_config (
+    id             BIGSERIAL PRIMARY KEY,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    key_id         VARCHAR(255) NOT NULL,   -- KMS alias (alias/aegis-keeper-YYYYQn) or Vault path
+    key_hash       VARCHAR(64)  NOT NULL,   -- sha256 hex of the signing public key
+    backend        VARCHAR(20)  NOT NULL,   -- aws_kms | vault | env_key
+    rotated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    active         BOOLEAN NOT NULL DEFAULT TRUE,
+    revoked        BOOLEAN NOT NULL DEFAULT FALSE,
+    revoked_at     TIMESTAMPTZ,
+    revoked_reason TEXT
+);
+
+-- At most one active signing key at any time.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_keeper_config_one_active
+ON keeper_config (active) WHERE active;
+
+-- Immutable audit trail: one row per transaction-signing operation.
+CREATE TABLE IF NOT EXISTS audit_signing_log (
+    id          BIGSERIAL PRIMARY KEY,
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    tx_hash     VARCHAR(128) NOT NULL,
+    key_id      VARCHAR(255) NOT NULL,
+    actor       VARCHAR(100) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_signing_log_timestamp
+ON audit_signing_log ("timestamp" DESC);
+
+-- Enforce immutability at the database level: the audit log is append-only.
+CREATE OR REPLACE RULE audit_signing_log_no_update AS
+ON UPDATE TO audit_signing_log DO INSTEAD NOTHING;
+
+CREATE OR REPLACE RULE audit_signing_log_no_delete AS
+ON DELETE TO audit_signing_log DO INSTEAD NOTHING;

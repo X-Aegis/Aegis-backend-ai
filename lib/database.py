@@ -709,3 +709,136 @@ def get_last_submitted_allocation():
             return float(row["proposed_allocations"]["stable"]) if row else None
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Secure key management (BK-11)
+# ---------------------------------------------------------------------------
+
+
+def get_active_signing_config():
+    """
+    Returns the active keeper signing-key config row as a dict, or None when no
+    key has been rotated in yet (dev / env_key mode).
+
+    Keys: id, created_at, key_id, key_hash, backend, rotated_at, active,
+    revoked, revoked_at, revoked_reason.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, created_at, key_id, key_hash, backend, rotated_at,
+                       active, revoked, revoked_at, revoked_reason
+                FROM keeper_config
+                WHERE active
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def insert_signing_config(key_id: str, key_hash: str, backend: str):
+    """
+    Records a newly rotated signing key.
+
+    Deactivates every existing row and inserts the new active row in one
+    transaction, so there is never a moment without an active key
+    ("rotation without downtime").
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE keeper_config SET active = FALSE WHERE active")
+            cur.execute(
+                """
+                INSERT INTO keeper_config (key_id, key_hash, backend, active)
+                VALUES (%s, %s, %s, TRUE)
+                """,
+                (key_id, key_hash, backend),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def revoke_active_signing_key(reason: str, actor: str):
+    """
+    Emergency-revokes the active signing key. Returns the revoked row (dict), or
+    None when there was no active key to revoke.
+
+    The keeper bot calls :func:`services.key_manager.assert_signing_allowed`
+    before every signing operation, so a revoked key blocks all further signing.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE keeper_config
+                SET revoked = TRUE, revoked_at = now(), revoked_reason = %s
+                WHERE active
+                RETURNING id, key_id, key_hash, backend, revoked, revoked_at,
+                          revoked_reason
+                """,
+                (f"{reason} (revoked by {actor})",),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return row
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def record_signing_event(tx_hash: str, key_id: str, actor: str):
+    """
+    Appends one immutable row to audit_signing_log for a signing operation.
+
+    audit_signing_log is INSERT-only: UPDATE/DELETE are blocked by database
+    rules (see db/schema.sql), and there is deliberately no update/delete helper.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO audit_signing_log (tx_hash, key_id, actor)
+                VALUES (%s, %s, %s)
+                """,
+                (tx_hash, key_id, actor),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_signing_audit_log(limit: int = 100):
+    """Returns recent signing-audit rows, newest first."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, "timestamp", tx_hash, key_id, actor
+                FROM audit_signing_log
+                ORDER BY id DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()

@@ -24,6 +24,7 @@ from stellar_sdk import Keypair, Server, TransactionBuilder, scval
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.database import (
+    get_active_signing_config,
     get_keeper_stats,
     get_keeper_status,
     get_last_submitted_allocation,
@@ -31,6 +32,12 @@ from lib.database import (
     record_keeper_decision,
     record_keeper_failure,
     record_keeper_heartbeat,
+    record_signing_event,
+)
+from services.key_manager import (
+    SigningKeyManager,
+    SigningKeyRevokedError,
+    assert_signing_allowed,
 )
 
 load_dotenv()
@@ -125,11 +132,10 @@ def execute_rebalance_transaction(
     Constructs, simulates, signs, and submits a real Soroban transaction
     using the official stellar-sdk.
     """
-    if SIGNING_BACKEND in ["aws_kms", "vault"]:
-        # TODO: Implement XDR parsing and raw signature injection for enterprise HSMs.
-        log.warning(
-            "Enterprise signing (KMS/Vault) selected but not yet implemented for Soroban XDR. Falling back to local wallet if available."
-        )
+    if SIGNING_BACKEND in ("aws_kms", "vault"):
+        # Envelope-encryption backends (BK-11): the ed25519 seed is stored only as
+        # KMS-encrypted ciphertext / in Vault KV and is recovered in memory here.
+        source_secret = SigningKeyManager(SIGNING_BACKEND).resolve_secret()
 
     if not source_secret:
         raise OSError("ADMIN_SECRET_KEY is not set. Cannot sign transaction.")
@@ -253,6 +259,22 @@ class KeeperBot:
     def _proposed_allocations(target: float) -> dict:
         return {"stable": target, "risky": 100.0 - target}
 
+    @staticmethod
+    def _record_signing_audit(send_response) -> None:
+        """Append an immutable audit_signing_log row for a completed signing op."""
+        try:
+            active = get_active_signing_config() or {}
+            tx_hash = (
+                send_response.get("hash", "") if isinstance(send_response, dict) else ""
+            )
+            record_signing_event(
+                tx_hash,
+                active.get("key_id") or SIGNING_BACKEND,
+                actor="keeper_bot",
+            )
+        except Exception as exc:  # noqa: BLE001 - audit failure must not crash the loop
+            log.error("Failed to write signing audit log: %s", exc)
+
     async def run_once(self) -> None:
         """Single poll-and-rebalance cycle."""
         # 0. Check circuit breaker and dead-man switch
@@ -331,20 +353,35 @@ class KeeperBot:
             "min_percentage_points": REBALANCE_THRESHOLD,
         }
 
-        # 4. Guard: require contract config
-        if not SOROBAN_CONTRACT_ID or not ADMIN_SECRET_KEY:
+        # 4. Guard: require contract config and a configured signing backend
+        signing_ready = (
+            bool(ADMIN_SECRET_KEY)
+            if SIGNING_BACKEND == "env_key"
+            else SigningKeyManager(SIGNING_BACKEND).is_configured()
+        )
+        if not SOROBAN_CONTRACT_ID or not signing_ready:
             record_keeper_decision(score, proposed_allocations, checks, "rejected")
             log.error(
-                "SOROBAN_CONTRACT_ID or ADMIN_SECRET_KEY is not configured. "
-                "Skipping submission."
+                "SOROBAN_CONTRACT_ID or the signing backend (%s) is not configured. "
+                "Skipping submission.",
+                SIGNING_BACKEND,
             )
+            return
+
+        # 4b. Refuse to sign if the active signing key has been emergency-revoked
+        try:
+            assert_signing_allowed()
+        except SigningKeyRevokedError as exc:
+            checks["signing_key"] = {"passed": False, "error": str(exc)}
+            record_keeper_decision(score, proposed_allocations, checks, "rejected")
+            log.error("Signing key revoked — refusing to sign rebalance: %s", exc)
             return
 
         # 5. Build, sign, and submit via Stellar SDK
         try:
             # We run this synchronous stellar-sdk process in the asyncio loop thread
             # since this bot only polls once an hour and won't block high-traffic endpoints.
-            execute_rebalance_transaction(
+            send_response = execute_rebalance_transaction(
                 target_stable_pct=target,
                 volatility_score=score,
                 contract_id=SOROBAN_CONTRACT_ID,
@@ -364,6 +401,7 @@ class KeeperBot:
                 target,
             )
             record_keeper_heartbeat()
+            self._record_signing_audit(send_response)
         except Exception as exc:  # noqa: BLE001 - keep the hourly loop alive on any SDK error
             log.error("Soroban transaction failed: %s", exc)
             checks["submission"] = {"passed": False, "error": str(exc)}
