@@ -34,6 +34,10 @@ from lib.database import (
     record_keeper_heartbeat,
     record_signing_event,
 )
+from services.keeper_metrics import (
+    refresh_keeper_metrics,
+    start_keeper_metrics_server,
+)
 from services.key_manager import (
     SigningKeyManager,
     SigningKeyRevokedError,
@@ -415,10 +419,34 @@ class KeeperBot:
             POLL_INTERVAL_SECONDS,
             REBALANCE_THRESHOLD,
         )
+        try:
+            start_keeper_metrics_server()
+        except Exception as exc:  # noqa: BLE001 - metrics must never halt the keeper
+            log.warning("Could not start keeper metrics server: %s", exc)
+
         while True:
             await self.run_once()
+            self._export_metrics()
             log.info("Sleeping %d seconds until next poll…", POLL_INTERVAL_SECONDS)
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
+
+    def _export_metrics(self) -> None:
+        """Refresh Prometheus gauges from the latest keeper state (BK-15a)."""
+        status = get_keeper_status()
+        stats = get_keeper_stats() or {}
+        last_heartbeat = status.get("last_heartbeat") if status else None
+        uptime = 0.0
+        if last_heartbeat:
+            try:
+                hours_since = (self._now() - last_heartbeat).total_seconds() / 3600
+            except TypeError:
+                hours_since = 0.0
+            uptime = max(0.0, 100.0 - (hours_since / 24.0) * 100.0)
+        refresh_keeper_metrics(
+            uptime_percent=uptime,
+            rebalances_last_24h=int(stats.get("count_last_24h") or 0),
+            rebalance_failures=int((status or {}).get("consecutive_failures") or 0),
+        )
 
 
 # ---------------------------------------------------------------------------

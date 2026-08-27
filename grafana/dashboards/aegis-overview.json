@@ -1,0 +1,122 @@
+{
+  "uid": "aegis-overview",
+  "title": "Aegis Backend & AI — Overview",
+  "tags": ["x-aegis", "backend-ai"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Prediction Accuracy",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Prediction Accuracy — MAE / RMSE",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "expr": "prediction_mae", "legendFormat": "MAE" },
+        { "expr": "prediction_rmse", "legendFormat": "RMSE" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Latest MAE",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{ "expr": "prediction_mae", "legendFormat": "MAE" }],
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Latest RMSE",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{ "expr": "prediction_rmse", "legendFormat": "RMSE" }],
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 }
+    },
+    {
+      "id": 5,
+      "type": "row",
+      "title": "API Latency",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "HTTP Latency p50 / p95",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 10 }
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "Keeper Bot",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }
+    },
+    {
+      "id": 8,
+      "type": "gauge",
+      "title": "Keeper Uptime %",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100 },
+        "overrides": []
+      },
+      "targets": [{ "expr": "keeper_uptime_percent", "legendFormat": "uptime" }],
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 19 }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Rebalance Frequency (last 24h)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{ "expr": "keeper_rebalances_last_24h", "legendFormat": "rebalances" }],
+      "gridPos": { "h": 6, "w": 9, "x": 6, "y": 19 }
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Rebalance Failures",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [{ "expr": "keeper_rebalance_failures", "legendFormat": "failures" }],
+      "gridPos": { "h": 6, "w": 9, "x": 15, "y": 19 }
+    }
+  ]
+}
