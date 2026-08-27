@@ -7,9 +7,10 @@ This document tracks the FX forecasting engine and automation infrastructure. Ac
 ## Phase 1: Data Pipeline
 
 ### BK-1: Live FX Data Ingestion — real NGN/KES rates
-- **Status:** OPEN — [GitHub Issue #30](https://github.com/X-Aegis/aegis-backend-ai/issues/30)
+- **Status:** DONE — [GitHub Issue #30](https://github.com/X-Aegis/aegis-backend-ai/issues/30)
 - **User impact:** The dashboard and volatility model use live, real market rates instead of stubbed data.
 - **Tasks:** ingester service, `fx_rates` storage, source fallback, stale-rate guard, `GET /fx/current`.
+- **Shipped:** `services/forex_ingester.py` polls every 15 minutes across an official vendor chain (Fixer.io → Open Exchange Rates → keyless fallback) plus a parallel-market feed; `GET /fx/current`, `/fx/history` and `/fx/sources` in `api/fx.py`; `GET /risk/current` now scores live rate history (`services/live_risk.py`) instead of stored stubs.
 
 ### BK-2: Database Schema
 - **Status:** DONE as part of the rate/prediction/snapshot storage used by the risk API.

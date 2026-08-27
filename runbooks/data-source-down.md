@@ -12,10 +12,16 @@ Component: ingestion and runtime deps (`services/forex_ingester.py`, database, S
 | --- | --- |
 | `fixer` | Fixer.io FX feed (`FIXER_API_KEY`) |
 | `openexchangerates` | Open Exchange Rates feed (`OPEN_EXCHANGE_RATES_APP_ID`) |
+| `exchangerate_api` | Keyless open endpoint used as the last-resort official fallback (`EXCHANGERATE_API_URL`) |
+| `parallel_market` | Parallel-market ("street rate") feed (`PARALLEL_MARKET_API_URL`) |
 | `stellar_rpc` | Soroban RPC used by the keeper |
 | `database` | PostgreSQL / TimescaleDB for `fx_rates`, predictions, snapshots |
 
-A single FX vendor down is recoverable if the other vendor still writes `fx_rates`. Both FX vendors down, or database down, starves `GET /risk/current` and can drive bad keeper decisions. Binance P2P in `forex_ingester.py` is a placeholder — do not page solely for that stub.
+A single FX vendor down is recoverable: the ingester fails over down the official chain (`fixer` → `openexchangerates` → `exchangerate_api`) and keeps writing `fx_rates`. Every official vendor down, or database down, starves `GET /risk/current` and can drive bad keeper decisions.
+
+The parallel-market feed is a separate leg, not a fallback for the official chain. Losing it does **not** stop ingestion, but `GET /risk/current` then scores the official series instead of the street rate users are actually exposed to — treat a parallel-feed outage as degraded, not down.
+
+Fastest triage: `curl "$API/fx/sources"` shows every feed's last quote, its age and whether it is stale — it separates "one feed stalled" from "ingestion is dead".
 
 ## Investigation steps
 
@@ -30,7 +36,8 @@ A single FX vendor down is recoverable if the other vendor still writes `fx_rate
 4. **stellar_rpc**
    - Query the configured `SOROBAN_RPC_URL` health / getLatestLedger.
    - Distinguish testnet (`https://soroban-testnet.stellar.org`) vs a private RPC.
-5. Check whether the other FX source is still up. If yes, ingestion should fail over; if `fx_rates` stopped entirely, both paths failed or `save_fx_rates` is erroring.
+5. Check whether the other FX sources are still up (`GET /fx/sources`). If yes, ingestion should fail over; if `fx_rates` stopped entirely, every path failed or `save_fx_rates` is erroring.
+   - A feed that answers HTTP 200 but keeps returning the *same* timestamp is treated as down by the stale-rate guard: the ingester drops those quotes and fails over. Look for `Stale-rate guard: dropping ...` in the ingester logs.
 6. Correlate with `ModelDriftDetected` — stale prints often show up as error-stream drift after the outage.
 
 ## Escalation path
@@ -49,5 +56,5 @@ A single FX vendor down is recoverable if the other vendor still writes `fx_rate
 3. Rotate or restore `FIXER_API_KEY` / `OPEN_EXCHANGE_RATES_APP_ID` if the vendor returns 401/403.
 4. Restore database connectivity or fail over. Do not backfill invented rates.
 5. For RPC: switch `SOROBAN_RPC_URL` to a healthy endpoint if the primary is down; restart the keeper after the URL change.
-6. When `aegis_datasource_up` returns to 1, confirm a fresh `fx_rates` row and that `/risk/current` timestamp is recent.
+6. When `aegis_datasource_up` returns to 1, confirm a fresh `fx_rates` row (`GET /fx/sources` shows `is_stale: false`) and that the `/risk/current` timestamp is recent.
 7. Resolve PagerDuty only after the labeled source is up for a full 5-minute `for` window.
