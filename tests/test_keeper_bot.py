@@ -189,6 +189,10 @@ class TestKeeperBotRunOnce:
         monkeypatch.setattr(kb, "record_keeper_heartbeat", Mock())
         monkeypatch.setattr(kb, "record_keeper_failure", Mock())
         monkeypatch.setattr(kb, "record_keeper_decision", Mock())
+        # BK-11 secure key management
+        monkeypatch.setattr(kb, "assert_signing_allowed", lambda: None)
+        monkeypatch.setattr(kb, "record_signing_event", Mock())
+        monkeypatch.setattr(kb, "get_active_signing_config", lambda: None)
 
     def _bot(self):
         return kb.KeeperBot()
@@ -439,3 +443,110 @@ class TestKeeperBotRunOnce:
             "rebalance_threshold",
         } <= checks.keys()
         assert decision == "approved"
+
+    # -- BK-11: revocation blocks signing, audit log on success --------------
+
+    def test_revoked_signing_key_blocks_submission(self, monkeypatch):
+        bot = self._bot()
+        bot._last_allocation = 90.0
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+
+        def _revoked():
+            raise kb.SigningKeyRevokedError("key alias/x was revoked at ...: leak")
+
+        monkeypatch.setattr(kb, "assert_signing_allowed", _revoked)
+        mock_execute = Mock()
+        mock_decision = Mock()
+        monkeypatch.setattr(kb, "execute_rebalance_transaction", mock_execute)
+        monkeypatch.setattr(kb, "record_keeper_decision", mock_decision)
+
+        _run(bot.run_once())
+
+        mock_execute.assert_not_called()
+        assert mock_decision.call_args.args[3] == "rejected"
+        assert mock_decision.call_args.args[2]["signing_key"]["passed"] is False
+
+    def test_records_signing_audit_on_success(self, monkeypatch):
+        bot = self._bot()
+        bot._last_allocation = 90.0
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb,
+            "execute_rebalance_transaction",
+            Mock(return_value={"hash": "deadbeef"}),
+        )
+        monkeypatch.setattr(
+            kb,
+            "get_active_signing_config",
+            lambda: {"key_id": "alias/aegis-keeper-2026Q3"},
+        )
+        mock_audit = Mock()
+        monkeypatch.setattr(kb, "record_signing_event", mock_audit)
+
+        _run(bot.run_once())
+
+        mock_audit.assert_called_once_with(
+            "deadbeef", "alias/aegis-keeper-2026Q3", actor="keeper_bot"
+        )
+
+    def test_signing_audit_failure_does_not_crash_loop(self, monkeypatch):
+        bot = self._bot()
+        bot._last_allocation = 90.0
+        monkeypatch.setattr(kb, "REBALANCE_THRESHOLD", 5.0)
+        monkeypatch.setattr(kb, "SOROBAN_CONTRACT_ID", "C")
+        monkeypatch.setattr(kb, "ADMIN_SECRET_KEY", TEST_SECRET_KEY)
+        monkeypatch.setattr(kb, "fetch_volatility_score", AsyncMock(return_value=85.0))
+        monkeypatch.setattr(
+            kb, "execute_rebalance_transaction", Mock(return_value={"hash": "x"})
+        )
+        monkeypatch.setattr(
+            kb, "record_signing_event", Mock(side_effect=RuntimeError("db down"))
+        )
+        mock_heartbeat = Mock()
+        monkeypatch.setattr(kb, "record_keeper_heartbeat", mock_heartbeat)
+
+        _run(bot.run_once())  # must not raise
+        mock_heartbeat.assert_called_once()
+        assert bot._last_allocation == 100.0
+
+
+class TestExecuteRebalanceEnterpriseBackends:
+    def test_vault_backend_resolves_seed_via_key_manager(self, monkeypatch):
+        fake_keypair = Mock()
+        fake_keypair.public_key = TEST_PUBLIC_KEY
+        fake_tx = Mock()
+        fake_sim = Mock()
+        fake_sim.error = None
+        fake_sim.transactionData = "footprint-data"
+        fake_sim.minResourceFee = 1000
+
+        fake_server = Mock()
+        fake_server.load_account.return_value = Mock()
+        fake_server.simulate_transaction.return_value = fake_sim
+        fake_server.send_transaction.return_value = {"hash": "vaulthash"}
+
+        monkeypatch.setattr(kb, "SIGNING_BACKEND", "vault")
+        monkeypatch.setattr(kb, "Server", lambda url: fake_server)
+        monkeypatch.setattr(kb, "Keypair", Mock(from_secret=lambda s: fake_keypair))
+        monkeypatch.setattr(kb, "TransactionBuilder", Mock())
+        kb.TransactionBuilder.return_value.append_invoke_contract_function_op.return_value.set_timeout.return_value.build.return_value = fake_tx
+
+        fake_manager = Mock()
+        fake_manager.resolve_secret.return_value = TEST_SECRET_KEY
+        monkeypatch.setattr(kb, "SigningKeyManager", lambda backend: fake_manager)
+
+        result = kb.execute_rebalance_transaction(
+            target_stable_pct=100.0,
+            volatility_score=85.5,
+            contract_id="CONTRACT_XYZ",
+            source_secret="",  # ignored for vault backend
+        )
+
+        fake_manager.resolve_secret.assert_called_once()
+        assert result == {"hash": "vaulthash"}

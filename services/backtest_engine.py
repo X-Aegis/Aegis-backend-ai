@@ -150,9 +150,7 @@ def _simulate(df, threshold, initial_capital, stable_apy, strategy_enabled):
     # Average calendar span of a period, used to annualize the Sharpe ratio for
     # series that may be sampled hourly, daily, etc. (or irregularly).
     periods_per_year = (
-        (total_periods * 365 / total_elapsed_days)
-        if total_elapsed_days > 0
-        else 0.0
+        (total_periods * 365 / total_elapsed_days) if total_elapsed_days > 0 else 0.0
     )
 
     return {
