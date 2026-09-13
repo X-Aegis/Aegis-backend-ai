@@ -299,6 +299,25 @@ def get_prediction_history(
         conn.close()
 
 
+def get_recent_sentiment(limit: int = 20):
+    """Returns recent sentiment records, newest first."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT "timestamp", source, keyword, sentiment_score
+                FROM sentiment_data
+                ORDER BY "timestamp" DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
 def list_backtest_results(pair=None, strategy_name=None, limit=20, offset=0):
     """
     Returns stored backtest reports ordered by most recent first, optionally
