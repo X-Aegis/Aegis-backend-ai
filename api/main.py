@@ -10,6 +10,7 @@ from api.keeper import router as keeper_router
 from api.metrics import HTTP_REQUEST_DURATION
 from api.metrics import router as metrics_router
 from api.monitoring import router as monitoring_router
+from api.partner import router as partner_router
 from api.portfolio import router as portfolio_router
 from api.risk import router as risk_router
 
@@ -30,6 +31,7 @@ app.include_router(fx_router)
 app.include_router(risk_router)
 app.include_router(monitoring_router)
 app.include_router(chat_router)
+app.include_router(partner_router)
 app.include_router(keeper_router)
 app.include_router(health_router)
 app.include_router(metrics_router)

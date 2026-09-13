@@ -9,11 +9,12 @@ We are committed to building a **financial volatility shield** that respects the
 ## Our Standards
 
 Examples of behavior that contributes to creating a positive environment include:
-*   Using welcoming and inclusive language.
-*   Being respectful of differing viewpoints and experiences.
-*   Gracefully accepting constructive criticism.
-*   Focusing on what is best for the community.
-*   Showing empathy towards other community members.
+
+* Using welcoming and inclusive language.
+* Being respectful of differing viewpoints and experiences.
+* Gracefully accepting constructive criticism.
+* Focusing on what is best for the community.
+* Showing empathy towards other community members.
 
 ## Enforcement
 
@@ -23,9 +24,9 @@ Instances of abusive, harassing, or otherwise unacceptable behavior may be repor
 
 When submitting a pull request:
 
-1.  **Link the Issue**: Use `Closes #`, `Fixes #`, or `Resolves #` in your PR description to auto-close the issue when merged.
-2.  **Tag the Maintainer**: After opening your PR, comment on the issue tagging `@bbkenny` to notify the maintainer(s) that your work is ready for review.
-3.  **Keep Changes Focused**: Only fix what's needed for the issue. Don't change hundreds of lines when a few lines will do. This shows you understand the problem and builds trust.
+1. **Link the Issue**: Use `Closes #`, `Fixes #`, or `Resolves #` in your PR description to auto-close the issue when merged.
+2. **Tag the Maintainer**: After opening your PR, comment on the issue tagging `@bbkenny` to notify the maintainer(s) that your work is ready for review.
+3. **Keep Changes Focused**: Only fix what's needed for the issue. Don't change hundreds of lines when a few lines will do. This shows you understand the problem and builds trust.
 
 ## Attribution
 
