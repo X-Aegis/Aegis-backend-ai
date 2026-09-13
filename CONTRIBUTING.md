@@ -1,4 +1,4 @@
-# Contributing to X-Aegis
+# Contributing to XHedge (Aegis)
 
 Thank you for your interest in building the future of inflation protection on Stellar! This guide will help you contribute effectively.
 

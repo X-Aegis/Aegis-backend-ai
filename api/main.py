@@ -14,7 +14,7 @@ from api.partner import router as partner_router
 from api.portfolio import router as portfolio_router
 from api.risk import router as risk_router
 
-app = FastAPI(title="X-Aegis Backend & AI", version="0.1.0")
+app = FastAPI(title="XHedge (Aegis) Backend & AI", version="0.1.0")
 
 
 @app.middleware("http")
